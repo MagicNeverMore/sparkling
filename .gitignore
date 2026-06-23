@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+wheels/
+.venv/
+venv/
+*.egg
+.Python
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.next/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# SQLite databases (user data)
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated / temporary files
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
