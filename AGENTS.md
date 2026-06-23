@@ -3,6 +3,7 @@
 本地优先的碎片想法管理工具。AI 自动语义关联 + 网状图可视化 + PWA 移动端。
 
 ## 当前阶段
+
 **MVP — Web 版（自托管单用户）+ PWA**。桌面端（Tauri）与局域网 mDNS 同步延后到 Phase 2/3。完整方案见 [PLAN.md](./PLAN.md)。
 
 ## 仓库结构
@@ -63,8 +64,8 @@ src-tauri/
 └── tauri.conf.json          # 打包配置，resources 包含 Python 可执行文件
 ```
 
-
 ## 启动 / 开发
+
 ```bash
 # 后端（http://127.0.0.1:8000）
 cd backend
@@ -81,6 +82,7 @@ pnpm dev
 ```
 
 ## 关键设计约定
+
 - **数据库**：SQLite + sqlite-vec。业务表走 SQLAlchemy；向量虚表 `vec_atoms` 在 Settings 写入 `embed_dim` 后由 `services/embedding.py` 动态 CREATE，**SQLAlchemy 不管它**。
 - **AI Provider**：统一使用 `openai` Python SDK，通过 `base_url` 适配多家（OpenAI / DeepSeek / 智谱 / Ollama 等）。配置存 `settings` 表，运行时从数据库读。
 - **Embedding 维度锁定**：用户选定 provider 后维度写入 `settings.embed_dim` 并锁定。切换 provider 走 `POST /api/settings/rebuild-embeddings` 重建（drop + recreate vec_atoms + 重新 embed 全部 atom）。
@@ -92,18 +94,21 @@ pnpm dev
 - **部署形态**：自托管单用户，默认监听 127.0.0.1。**无 auth/JWT/多租户**。
 
 ## 编码约定
+
 - 后端：函数式优先，业务逻辑用 `Result`/异常分层（HTTPException 仅在 router 层抛出）。中文注释关键逻辑。
 - 前端：组件函数式，状态用 Zustand。命名 camelCase。样式 Tailwind 原子类，避免 `App.css` 等全局样式残留。
 - **不提交** `console.log` / `debugger` / 调试代码。
 - 提交前手动执行：后端 `uv run ruff check`（如已配置）；前端 `pnpm exec tsc --noEmit && pnpm build`。
 
 ## 不在 MVP 范围内
+
 - 局域网 mDNS 同步 / 多设备 sync_log（Phase 3）
 - Tauri 桌面打包（Phase 3）
 - 语音 / 图片 / URL 想法类型，主题聚类（Phase 2）
 - 多用户登录，PWA 离线写入（不做）
 
 ## 环境变量（可选）
+
 ```bash
 SPARKLING_DB_PATH=~/.sparkling/sparkling.db   # SQLite 路径
 SPARKLING_HOST=127.0.0.1
@@ -112,3 +117,5 @@ SPARKLING_DEV_ORIGIN=http://localhost:5173    # 前端 dev server CORS
 ```
 
 AI Provider 的 `base_url` / `api_key` / 模型 / 维度由用户在前端 Settings 页面录入，**不走环境变量**，便于换号。
+
+尽量使用已有的组件库，不要重复造轮子
