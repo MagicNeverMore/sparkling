@@ -1,10 +1,26 @@
 import { useEffect, useMemo, useState } from 'react'
+import {
+  forceCenter,
+  forceCollide,
+  forceLink,
+  forceManyBody,
+  forceSimulation,
+  type SimulationLinkDatum,
+  type SimulationNodeDatum,
+} from 'd3-force'
 import ReactFlow, {
   Background,
+  BaseEdge,
   Controls,
+  EdgeLabelRenderer,
+  Handle,
+  Position,
   ReactFlowProvider,
+  getStraightPath,
+  useNodesState,
   useReactFlow,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeProps,
 } from 'reactflow'
@@ -21,8 +37,35 @@ interface GraphNodeData {
   id: string
   content: string
   degree: number
-  size: number
   highlight: boolean
+}
+
+interface LayoutNode extends SimulationNodeDatum {
+  id: string
+  content: string
+  degree: number
+}
+
+interface LayoutLink extends SimulationLinkDatum<LayoutNode> {
+  source: string
+  target: string
+  strength: number
+}
+
+const PILL_HEIGHT = 32
+const FORCE_LINK_DISTANCE = 120
+const FORCE_CHARGE_STRENGTH = -350
+
+const truncateNodeContent = (content: string) => {
+  const chars = Array.from(content.trim())
+  return chars.length > 14 ? `${chars.slice(0, 14).join('')}…` : chars.join('')
+}
+
+const estimateRadius = (text: string, degree: number) => {
+  const visibleChars = Math.min(Array.from(text.trim()).length, 14)
+  const charWidth = degree >= 5 ? 15 : 13
+  const estimatedWidth = visibleChars * charWidth + 24
+  return Math.min(110, Math.max(50, estimatedWidth / 2))
 }
 
 const getLinkedAtomIds = (atomId: string, links: LinkMock[]) => {
@@ -42,19 +85,24 @@ const getSecondDegreeIds = (atomId: string, links: LinkMock[]) => {
 }
 
 function ThoughtNode({ data }: NodeProps<GraphNodeData>) {
+  const pillClassName = data.highlight
+    ? 'border-violet-300 bg-violet-400 text-slate-950 ring-2 ring-violet-400/40'
+    : data.degree >= 5
+      ? 'border-violet-400 bg-slate-900 text-violet-200'
+      : 'border-slate-700 bg-slate-900 text-slate-200'
+
   return (
-    <div className="group relative flex items-center justify-center">
-      <div
-        className={`flex items-center justify-center rounded-full border-2 bg-slate-900 p-3 text-center text-xs leading-5 shadow-xl transition ${
-          data.highlight
-            ? 'border-violet-400 text-violet-400 ring-2 ring-violet-400/40'
-            : data.degree >= 5
-              ? 'border-violet-400 text-slate-100'
-              : 'border-slate-700 text-slate-100'
-        }`}
-        style={{ width: data.size, height: data.size }}
-      >
-        <span className="line-clamp-3">{data.content.slice(0, 20)}</span>
+    <div className="group relative inline-flex">
+      <Handle type="source" id="source-top" position={Position.Top} className="!h-2 !w-2 !border-0 !bg-transparent" />
+      <Handle type="target" id="target-top" position={Position.Top} className="!h-2 !w-2 !border-0 !bg-transparent" />
+      <Handle type="source" id="source-right" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
+      <Handle type="target" id="target-right" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
+      <Handle type="source" id="source-bottom" position={Position.Bottom} className="!h-2 !w-2 !border-0 !bg-transparent" />
+      <Handle type="target" id="target-bottom" position={Position.Bottom} className="!h-2 !w-2 !border-0 !bg-transparent" />
+      <Handle type="source" id="source-left" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
+      <Handle type="target" id="target-left" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
+      <div className={`inline-flex h-8 items-center whitespace-nowrap rounded-full border px-3 py-1.5 leading-none shadow-lg transition ${data.degree >= 5 ? 'text-sm' : 'text-xs'} ${pillClassName}`}>
+        {truncateNodeContent(data.content)}
       </div>
       <div className="nodrag nopan pointer-events-auto absolute left-1/2 top-full z-30 mt-2 hidden w-64 -translate-x-1/2 rounded-xl border border-slate-800 bg-slate-950 p-3 text-left text-xs leading-5 text-slate-300 shadow-2xl group-hover:block">
         <div className="line-clamp-4">{data.content}</div>
@@ -69,8 +117,29 @@ function ThoughtNode({ data }: NodeProps<GraphNodeData>) {
 
 const nodeTypes = { thought: ThoughtNode }
 
+function SuggestedEdge({ id, sourceX, sourceY, targetX, targetY, data, style }: EdgeProps<{ confidence: number }>) {
+  const [edgePath, labelX, labelY] = getStraightPath({ sourceX, sourceY, targetX, targetY })
+
+  return (
+    <>
+      <BaseEdge id={id} path={edgePath} style={style} />
+      <EdgeLabelRenderer>
+        <div
+          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+          className="pointer-events-none absolute rounded border border-slate-800 bg-slate-950 px-1 py-0.5 text-[10px] text-violet-300/80"
+        >
+          {data?.confidence.toFixed(2)}
+        </div>
+      </EdgeLabelRenderer>
+    </>
+  )
+}
+
+const edgeTypes = { 'labeled-suggestion': SuggestedEdge }
+
 function GraphInner({ atoms, links }: Props) {
   const flow = useReactFlow()
+  const [nodes, setNodes, onNodesChange] = useNodesState<GraphNodeData>([])
   const [mode, setMode] = useState<'all' | 'focus'>('all')
   const [focusId, setFocusId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -91,30 +160,76 @@ function GraphInner({ atoms, links }: Props) {
 
   const visibleAtoms = useMemo(() => atoms.filter((atom) => visibleIds.has(atom.id)), [atoms, visibleIds])
 
-  const nodes = useMemo<Node<GraphNodeData>[]>(() => {
-    const radius = Math.max(260, visibleAtoms.length * 42)
+  const layoutNodes = useMemo<Node<GraphNodeData>[]>(() => {
+    const visible = new Set(visibleAtoms.map((atom) => atom.id))
+    const layoutNodes: LayoutNode[] = visibleAtoms.map((atom) => ({
+      id: atom.id,
+      content: atom.content,
+      degree: degreeMap.get(atom.id) ?? 0,
+    }))
+    const layoutLinks: LayoutLink[] = links
+      .filter((link) => visible.has(link.fromAtomId) && visible.has(link.toAtomId))
+      .map((link) => ({
+        source: link.fromAtomId,
+        target: link.toAtomId,
+        strength: link.confidence,
+      }))
+
+    const sim = forceSimulation<LayoutNode>(layoutNodes)
+      .force(
+        'link',
+        forceLink<LayoutNode, LayoutLink>(layoutLinks)
+          .id((node) => node.id)
+          .distance(FORCE_LINK_DISTANCE)
+          .strength((link) => link.strength),
+      )
+      .force('charge', forceManyBody<LayoutNode>().strength(FORCE_CHARGE_STRENGTH))
+      .force('center', forceCenter(0, 0))
+      .force('collide', forceCollide<LayoutNode>((node) => estimateRadius(node.content, node.degree) + 16))
+      .stop()
+
+    for (let i = 0; i < 300; i += 1) sim.tick()
+
+    const positionMap = new Map(layoutNodes.map((node) => [node.id, { x: node.x ?? 0, y: node.y ?? 0 }]))
     const q = query.trim().toLowerCase()
-    return visibleAtoms.map((atom, index) => {
-      const angle = (Math.PI * 2 * index) / Math.max(visibleAtoms.length, 1)
+    return visibleAtoms.map((atom) => {
+      const position = positionMap.get(atom.id) ?? { x: 0, y: 0 }
       const degree = degreeMap.get(atom.id) ?? 0
-      const size = Math.min(120, 64 + degree * 6)
+      const radius = estimateRadius(atom.content, degree)
       return {
         id: atom.id,
         type: 'thought',
         position: {
-          x: Math.cos(angle) * radius + radius,
-          y: Math.sin(angle) * radius + radius,
+          x: position.x - radius,
+          y: position.y - PILL_HEIGHT / 2,
         },
         data: {
           id: atom.id,
           content: atom.content,
           degree,
-          size,
           highlight: atom.id === focusId || (q.length > 0 && atom.content.toLowerCase().includes(q)),
         },
       }
     })
-  }, [degreeMap, focusId, query, visibleAtoms])
+  }, [degreeMap, focusId, links, query, visibleAtoms])
+
+  const visibleAtomKey = useMemo(() => visibleAtoms.map((atom) => atom.id).join('|'), [visibleAtoms])
+
+  useEffect(() => {
+    setNodes((currentNodes) => {
+      const currentById = new Map(currentNodes.map((node) => [node.id, node]))
+      return layoutNodes.map((node) => {
+        const current = currentById.get(node.id)
+        if (!current) return node
+        return {
+          ...node,
+          dragging: current.dragging,
+          position: current.position,
+          selected: current.selected,
+        }
+      })
+    })
+  }, [layoutNodes, setNodes])
 
   const edges = useMemo<Edge[]>(() => {
     const visible = new Set(visibleAtoms.map((atom) => atom.id))
@@ -124,10 +239,12 @@ function GraphInner({ atoms, links }: Props) {
         id: link.id,
         source: link.fromAtomId,
         target: link.toAtomId,
-        animated: !link.userConfirmed,
+        type: link.userConfirmed ? undefined : 'labeled-suggestion',
+        animated: false,
+        data: { confidence: link.confidence },
         style: {
           stroke: link.userConfirmed ? '#34d399' : '#a78bfa',
-          strokeWidth: link.userConfirmed ? 2 : 1.5,
+          strokeWidth: link.userConfirmed ? 1.5 + link.confidence * 1.5 : 1 + link.confidence * 1.5,
           strokeDasharray: link.userConfirmed ? undefined : '6 6',
         },
       }))
@@ -138,9 +255,25 @@ function GraphInner({ atoms, links }: Props) {
     if (!q) return
     const match = nodes.find((node) => node.data.content.toLowerCase().includes(q))
     if (!match) return
-    const size = match.data.size
-    void flow.setCenter(match.position.x + size / 2, match.position.y + size / 2, { zoom: 1.5, duration: 400 })
+    void flow.setCenter(match.position.x + estimateRadius(match.data.content, match.data.degree), match.position.y + PILL_HEIGHT / 2, { zoom: 1.5, duration: 400 })
   }, [flow, nodes, query])
+
+  useEffect(() => {
+    if (nodes.length === 0) return undefined
+    let secondFrame = 0
+    const fitGraph = () => {
+      void flow.fitView({ padding: 0.2, duration: 0 })
+    }
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(fitGraph)
+    })
+    const fallback = window.setTimeout(fitGraph, 120)
+    return () => {
+      window.cancelAnimationFrame(firstFrame)
+      window.cancelAnimationFrame(secondFrame)
+      window.clearTimeout(fallback)
+    }
+  }, [flow, nodes.length, visibleAtomKey])
 
   const reset = () => {
     setMode('all')
@@ -191,9 +324,13 @@ function GraphInner({ atoms, links }: Props) {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        fitView
+        edgeTypes={edgeTypes}
+        onNodesChange={onNodesChange}
         minZoom={0.2}
         maxZoom={2}
+        nodesDraggable
+        nodesFocusable
+        elementsSelectable
         onNodeClick={(_, node) => {
           setFocusId(node.id)
         }}
@@ -203,8 +340,27 @@ function GraphInner({ atoms, links }: Props) {
         }}
       >
         <Background color="#334155" gap={24} />
-        <Controls className="!border-slate-800 !bg-slate-900 !shadow-xl" />
+        <Controls position="top-right" className="!border-slate-800 !bg-slate-900 !shadow-xl" />
       </ReactFlow>
+      <div className="absolute bottom-4 right-4 z-20 space-y-1.5 rounded-xl border border-slate-800 bg-slate-900/95 p-3 text-xs text-slate-400 shadow-xl backdrop-blur">
+        <div className="text-slate-300">图例</div>
+        <div className="flex items-center gap-2">
+          <svg width="24" height="2" viewBox="0 0 24 2" aria-hidden="true">
+            <line x1="0" y1="1" x2="24" y2="1" stroke="#34d399" strokeWidth="2" />
+          </svg>
+          <span>已确认关联</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <svg width="24" height="2" viewBox="0 0 24 2" aria-hidden="true">
+            <line x1="0" y1="1" x2="24" y2="1" stroke="#a78bfa" strokeWidth="2" strokeDasharray="4 4" />
+          </svg>
+          <span>AI 建议 (带相似度)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-violet-400 ring-2 ring-violet-400/30" />
+          <span>枢纽（≥5 关联）</span>
+        </div>
+      </div>
     </div>
   )
 }
