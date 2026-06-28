@@ -39,3 +39,6 @@ Thumbs.db
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.codex-task-graph*.md
+截图*.jpg
+截图*.png
