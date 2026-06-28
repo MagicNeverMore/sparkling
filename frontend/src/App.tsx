@@ -5,6 +5,7 @@ import Inbox from './pages/Inbox'
 import Graph from './pages/Graph'
 import Search from './pages/Search'
 import Settings from './pages/Settings'
+import Tasks from './pages/Tasks'
 import AtomDetail from './pages/AtomDetail'
 import { ToastProvider } from './components/useToast'
 import { useMockWs } from './lib/useMockWs'
@@ -23,6 +24,7 @@ function AppRoutes() {
         <Route path="/inbox" element={<Inbox />} />
         <Route path="/graph" element={<Graph />} />
         <Route path="/search" element={<Search />} />
+        <Route path="/tasks" element={<Tasks />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/atoms/:id" element={<AtomDetail />} />
       </Routes>

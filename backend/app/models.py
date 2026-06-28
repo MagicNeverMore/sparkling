@@ -82,6 +82,23 @@ class TaskQueue(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class UserTask(Base):
+    """用户任务（自媒体发布计划、App 开发计划等）。"""
+
+    __tablename__ = "user_task"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String)  # social_media|app_dev|other 或自定义
+    start_date: Mapped[str | None] = mapped_column(String)  # 'YYYY-MM-DD'
+    due_date: Mapped[str | None] = mapped_column(String)  # 'YYYY-MM-DD'
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    completed_at: Mapped[datetime | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 class Settings(Base):
     """单行配置表。"""
 

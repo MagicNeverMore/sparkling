@@ -3,7 +3,7 @@ import { navItems } from '../lib/navigation'
 
 export default function BottomTabBar() {
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-30 grid h-16 grid-cols-4 border-t border-slate-800 bg-slate-950/95 backdrop-blur md:hidden">
+    <nav className="fixed inset-x-0 bottom-0 z-30 grid h-16 grid-cols-5 border-t border-slate-800 bg-slate-950/95 backdrop-blur md:hidden">
       {navItems.map((item) => (
         <NavLink
           key={item.to}

@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import config
-from .routers import atoms, graph, links, search, settings, ws
+from .routers import atoms, graph, links, search, settings, tasks, ws
 from .workers.runner import start_worker, stop_worker
 
 
@@ -37,6 +37,7 @@ app.include_router(atoms.router, prefix="/api/atoms", tags=["atoms"])
 app.include_router(links.router, prefix="/api/links", tags=["links"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
+app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(ws.router, tags=["ws"])
 
 
