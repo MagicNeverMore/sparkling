@@ -261,7 +261,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
         // 先无动画 fitView，再无动画缩至 70%，一步到位不闪烁
         await graph.fitView(undefined, false)
         const fitted = graph.getZoom()
-        await graph.zoomTo(Math.max(fitted * 0.7, 0.15), false)
+        await graph.zoomTo(Math.max(fitted * 0.63, 0.15), false)
       }
       const sid = selectedIdRef.current
       if (sid) void graph.setElementState(sid, ['selected'])
