@@ -116,7 +116,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     const graph = new Graph({
       container,
       autoResize: true,
-      autoFit: 'view',
+      animation: false,
       background: '#020617',
       node: {
         type: 'circle',
@@ -256,11 +256,12 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     })
 
     void graph.render().then(async () => {
-      // 首次进入图谱：在 autoFit 基础上再缩小 30%，但不低于 0.15 以免节点极多时过于拥挤
       if (isFirstRenderRef.current) {
         isFirstRenderRef.current = false
+        // 先无动画 fitView，再无动画缩至 70%，一步到位不闪烁
+        await graph.fitView(undefined, false)
         const fitted = graph.getZoom()
-        await graph.zoomTo(Math.max(fitted * 0.7, 0.15))
+        await graph.zoomTo(Math.max(fitted * 0.7, 0.15), false)
       }
       const sid = selectedIdRef.current
       if (sid) void graph.setElementState(sid, ['selected'])
