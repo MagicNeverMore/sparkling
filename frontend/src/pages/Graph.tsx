@@ -8,7 +8,10 @@ export default function Graph() {
   const atoms = useSparklingStore((state) => state.atoms)
   const links = useSparklingStore((state) => state.links)
   const loading = useSparklingStore((state) => state.loading)
+  const confirmLink = useSparklingStore((state) => state.confirmLink)
+  const ignoreLink = useSparklingStore((state) => state.ignoreLink)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [pendingId, setPendingId] = useState<string | null>(null)
 
   const selectedAtom = atoms.find((a) => a.id === selectedId) ?? null
 
@@ -112,19 +115,54 @@ export default function Graph() {
                   {related.suggested.map((item) => {
                     const target = atoms.find((a) => a.id === item.atomId)
                     if (!target) return null
+                    const isProcessing = pendingId === item.linkId
                     return (
-                      <button
+                      <div
                         key={item.linkId}
-                        type="button"
-                        onClick={() => setSelectedId(target.id)}
-                        className="flex w-full gap-2 rounded-lg border border-slate-800 p-2 text-left text-xs text-slate-400 transition hover:border-slate-700 hover:text-slate-200"
+                        className="flex items-start gap-1.5 rounded-lg border border-slate-800 p-2 text-xs transition hover:border-slate-700"
                       >
-                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />
-                        <span className="line-clamp-2 flex-1">{target.content}</span>
-                        <span className="shrink-0 text-violet-400/70">
-                          {item.confidence.toFixed(2)}
-                        </span>
-                      </button>
+                        {/* 点击文本区域跳转节点 */}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(target.id)}
+                          className="flex min-w-0 flex-1 items-start gap-2 text-left text-slate-400 hover:text-slate-200"
+                        >
+                          <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />
+                          <span className="line-clamp-2 flex-1">{target.content}</span>
+                          <span className="shrink-0 text-violet-400/70">
+                            {item.confidence.toFixed(2)}
+                          </span>
+                        </button>
+                        {/* 接受 / 拒绝 */}
+                        <div className="flex shrink-0 gap-1">
+                          <button
+                            type="button"
+                            disabled={isProcessing}
+                            title="接受关联"
+                            onClick={async () => {
+                              setPendingId(item.linkId)
+                              await confirmLink(item.linkId)
+                              setPendingId(null)
+                            }}
+                            className="rounded p-1 text-slate-500 transition hover:bg-emerald-400/10 hover:text-emerald-400 disabled:opacity-40"
+                          >
+                            ✓
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isProcessing}
+                            title="忽略关联"
+                            onClick={async () => {
+                              setPendingId(item.linkId)
+                              await ignoreLink(item.linkId)
+                              setPendingId(null)
+                            }}
+                            className="rounded p-1 text-slate-500 transition hover:bg-rose-400/10 hover:text-rose-400 disabled:opacity-40"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
                     )
                   })}
                 </div>
