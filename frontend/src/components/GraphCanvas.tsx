@@ -72,6 +72,8 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
   const onNodeSelectRef = useRef(onNodeSelect)
   const selectedIdRef = useRef(selectedId)
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 首次渲染标记，用于初始缩放处理
+  const isFirstRenderRef = useRef(true)
 
   const [tooltip, setTooltip] = useState<{
     content: string
@@ -253,8 +255,13 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       })),
     })
 
-    // render 完成后恢复选中态
-    void graph.render().then(() => {
+    void graph.render().then(async () => {
+      // 首次进入图谱：在 autoFit 基础上再缩小 30%，但不低于 0.15 以免节点极多时过于拥挤
+      if (isFirstRenderRef.current) {
+        isFirstRenderRef.current = false
+        const fitted = graph.getZoom()
+        await graph.zoomTo(Math.max(fitted * 0.7, 0.15))
+      }
       const sid = selectedIdRef.current
       if (sid) void graph.setElementState(sid, ['selected'])
     })
@@ -320,18 +327,33 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
 
       {/* 左上：视图控制 */}
       <div className="pointer-events-auto absolute left-4 top-4 z-20 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/95 p-2 shadow-xl backdrop-blur">
-        <select
-          value={mode}
-          onChange={(e) => {
-            const next = e.target.value as 'all' | 'focus'
-            if (next === 'focus' && !focusId) return
-            setMode(next)
-          }}
-          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 outline-none focus:border-violet-400"
-        >
-          <option value="all">全图</option>
-          <option value="focus">聚焦</option>
-        </select>
+        <div className="flex overflow-hidden rounded-md border border-slate-700">
+          <button
+            type="button"
+            onClick={() => setMode('all')}
+            className={`px-3 py-1.5 text-sm transition ${
+              mode === 'all'
+                ? 'bg-slate-700 text-slate-100'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+            }`}
+          >
+            全图
+          </button>
+          <button
+            type="button"
+            onClick={() => { if (focusId) setMode('focus') }}
+            title={!focusId ? '先单击一个节点' : undefined}
+            className={`border-l border-slate-700 px-3 py-1.5 text-sm transition ${
+              mode === 'focus'
+                ? 'bg-slate-700 text-slate-100'
+                : focusId
+                  ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+                  : 'cursor-not-allowed text-slate-600'
+            }`}
+          >
+            聚焦
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => {
