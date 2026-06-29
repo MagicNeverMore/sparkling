@@ -1,39 +1,32 @@
 """FastAPI 入口：挂载路由、WebSocket、静态前端，启动后台 worker。"""
 from __future__ import annotations
 
-import asyncio
-import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from .config import config
-from .db import engine
+from .db import DatabaseConnectionError, configure_current_database
 from .routers import atoms, graph, links, search, settings, tasks, ws
-from .workers.runner import start_worker, stop_worker
+from .runtime import start_background_worker, stop_background_worker
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    task: asyncio.Task | None = None
     try:
-        # 首次启动时启用 WAL 模式，提升读写并发性能
-        with engine.connect() as conn:
-            conn.execute(text("PRAGMA journal_mode=WAL"))
-            conn.execute(text("PRAGMA synchronous=NORMAL"))
-        task = await start_worker()
-    except (SQLAlchemyError, sqlite3.Error):
+        configure_current_database()
+        await start_background_worker()
+    except (SQLAlchemyError, Exception):
         # 数据库不可达时仍保持 HTTP 服务启动，API handler 会返回可展示的 JSON message。
-        task = None
+        pass
     try:
         yield
     finally:
-        await stop_worker(task)
+        await stop_background_worker()
 
 
 app = FastAPI(title="Sparkling", lifespan=lifespan)
@@ -53,11 +46,11 @@ async def sqlalchemy_exception_handler(_request, exc: SQLAlchemyError) -> JSONRe
     )
 
 
-@app.exception_handler(sqlite3.Error)
-async def sqlite_exception_handler(_request, exc: sqlite3.Error) -> JSONResponse:  # noqa: ANN001
+@app.exception_handler(DatabaseConnectionError)
+async def database_connection_exception_handler(_request, exc: DatabaseConnectionError) -> JSONResponse:  # noqa: ANN001
     return JSONResponse(
         status_code=503,
-        content={"message": _database_error_message(exc), "detail": str(exc)},
+        content={"message": str(exc), "detail": str(exc)},
     )
 
 # 开发期允许前端 dev server 跨域访问

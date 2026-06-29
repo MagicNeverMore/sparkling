@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from ..db import get_raw_conn
 from ..models import ThoughtAtom
+from ..vector_store import delete_vectors, vec_table_exists
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +42,7 @@ def purge_expired_deleted_atoms(session: Session) -> int:
 
 
 def _delete_vec_rows(atom_ids: list[str]) -> None:
-    """vec_atoms 是虚表，不受外键级联约束，需要单独清理。"""
-    placeholders = ",".join("?" for _ in atom_ids)
-    with get_raw_conn() as conn:
-        exists = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_atoms'",
-        ).fetchone()
-        if not exists:
-            return
-        conn.execute(f"DELETE FROM vec_atoms WHERE atom_id IN ({placeholders})", atom_ids)
-        conn.commit()
+    """清理 vec_atoms 中的向量记录（vec_atoms 不受外键级联约束）。"""
+    if not vec_table_exists():
+        return
+    delete_vectors(atom_ids)

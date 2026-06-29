@@ -1,6 +1,7 @@
-"""Embedding 服务：vec_table 管理、向量生成、语义搜索。
+"""Embedding 服务：向量生成、语义搜索。
 
-vec_atoms 是 sqlite-vec 虚表，不归 SQLAlchemy 管，动态建表。
+vec_atoms 的建表/写入/KNN 操作委托给 app.vector_store 统一处理，
+调用方无需感知底层是 sqlite-vec 还是 pgvector。
 embed_dim 一旦写入 Settings 就锁定，切换 provider 需走 rebuild-embeddings 流程。
 """
 from __future__ import annotations
@@ -10,13 +11,17 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-import sqlite_vec
 from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..db import get_raw_conn
 from ..models import AtomEmbedding, Settings, ThoughtAtom
+from ..vector_store import (
+    get_vector,
+    knn_search,
+    serialize_vector,
+    upsert_vector,
+)
 
 if TYPE_CHECKING:
     pass
@@ -25,38 +30,6 @@ logger = logging.getLogger(__name__)
 
 # 防止 rebuild 和 embed_atom 同时操作 vec_atoms
 _vec_table_lock = asyncio.Lock()
-
-
-# ──────────────────────────────────────────────
-# vec_atoms 虚表管理
-# ──────────────────────────────────────────────
-
-def ensure_vec_table(dim: int) -> None:
-    """首次设置 embed_dim 时创建 vec_atoms 虚表（已存在则跳过）。"""
-    with get_raw_conn() as conn:
-        exists = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_atoms'"
-        ).fetchone()
-        if exists:
-            return
-        _do_create_vec_table(conn, dim)
-        logger.info("vec_atoms 虚表已创建，维度=%d", dim)
-
-
-def create_vec_table(dim: int) -> None:
-    """强制重建 vec_atoms（rebuild-embeddings 流程调用）。"""
-    with get_raw_conn() as conn:
-        conn.execute("DROP TABLE IF EXISTS vec_atoms")
-        _do_create_vec_table(conn, dim)
-        logger.info("vec_atoms 虚表已重建，维度=%d", dim)
-
-
-def _do_create_vec_table(conn, dim: int) -> None:
-    conn.execute(
-        f"CREATE VIRTUAL TABLE vec_atoms "
-        f"USING vec0(atom_id TEXT PRIMARY KEY, embedding float[{dim}] distance_metric=cosine)"
-    )
-    conn.commit()
 
 
 # ──────────────────────────────────────────────
@@ -106,15 +79,9 @@ async def embed_atom(session: Session, atom_id: str, settings: Settings) -> None
 
     vectors = await embed_texts(settings, [atom.content])
     vec = vectors[0]
-    vec_bytes = sqlite_vec.serialize_float32(vec)
 
     async with _vec_table_lock:
-        with get_raw_conn() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO vec_atoms(atom_id, embedding) VALUES (?, ?)",
-                [atom_id, vec_bytes],
-            )
-            conn.commit()
+        upsert_vector(atom_id, vec)
 
     # 写入或更新 atom_embedding 元数据
     existing = session.get(AtomEmbedding, atom_id)
@@ -145,18 +112,11 @@ def knn_by_existing_embedding(
     similarity = 1 - cosine_distance，范围 [0, 1]，越高越相关。
     不重新调用 embedding API，适合 link_discover worker 使用。
     """
-    with get_raw_conn() as conn:
-        row = conn.execute(
-            "SELECT embedding FROM vec_atoms WHERE atom_id = ?", [atom_id]
-        ).fetchone()
-        if row is None:
-            return []
-        embedding_bytes = row[0]
-        rows = conn.execute(
-            "SELECT atom_id, distance FROM vec_atoms "
-            "WHERE embedding MATCH ? AND k = ? AND atom_id != ?",
-            [embedding_bytes, k, atom_id],
-        ).fetchall()
+    embedding_bytes = get_vector(atom_id)
+    if embedding_bytes is None:
+        return []
+
+    rows = knn_search(embedding_bytes, k, exclude_id=atom_id)
 
     deleted = exclude_deleted_ids or set()
     return [
@@ -184,7 +144,7 @@ async def search_similar(
         return []
 
     vectors = await embed_texts(settings, [query_text])
-    q_bytes = sqlite_vec.serialize_float32(vectors[0])
+    q_vec = vectors[0]
 
     # 查询已删除 atom 的 id，用于过滤结果
     deleted_ids = {
@@ -194,11 +154,10 @@ async def search_similar(
         ).fetchall()
     }
 
-    with get_raw_conn() as conn:
-        rows = conn.execute(
-            "SELECT atom_id, distance FROM vec_atoms WHERE embedding MATCH ? AND k = ?",
-            [q_bytes, k],
-        ).fetchall()
+    # 序列化查询向量用于 KNN（vector_store 内部处理序列化）
+    q_bytes = serialize_vector(q_vec)
+
+    rows = knn_search(q_bytes, k)
 
     return [
         (r[0], round(1 - r[1], 6))

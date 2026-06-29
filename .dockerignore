@@ -1,0 +1,53 @@
+# ===== Node / Frontend =====
+node_modules/
+frontend/dist/
+frontend/.next/
+*.tsbuildinfo
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+*.egg
+
+# ===== 前端构建产物在 backend 内的副本 =====
+backend/app/frontend/
+
+# ===== 环境 / 密钥 =====
+.env
+.env.local
+.env.*.local
+
+# ===== OS / IDE =====
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ===== SQLite 数据库（运行时通过 volume 挂载） =====
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# ===== Git =====
+.git/
+.gitignore
+.gitattributes
+
+# ===== 文档 / 截图 =====
+*.md
+截图*.jpg
+截图*.png
+*.log
+
+# ===== Docker 自身 =====
+Dockerfile
+docker-compose.yml
+.dockerignore

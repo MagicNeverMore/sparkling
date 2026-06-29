@@ -4,13 +4,16 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
-from ..db import get_session
+from ..db import DatabaseConnectionError, get_session, switch_database
 from ..models import AtomEmbedding, Settings, ThoughtAtom
+from ..runtime import start_background_worker, stop_background_worker
 from ..services import task_queue as tq
-from ..services.embedding import create_vec_table, ensure_vec_table, test_provider
+from ..services.runtime_config import build_database_config, get_database_config
+from ..services.embedding import test_provider
+from ..vector_store import create_vec_table, ensure_vec_table
 
 router = APIRouter()
 
@@ -23,6 +26,26 @@ class SettingsUpdate(BaseModel):
     chat_model: Optional[str] = None
     link_threshold_auto: Optional[float] = None
     link_threshold_suggest: Optional[float] = None
+
+
+class DatabaseSettingsOut(BaseModel):
+    db_backend: str
+    db_path: Optional[str]
+    postgresql_url: Optional[str]
+    restart_required: bool = False
+
+
+class DatabaseSettingsUpdate(BaseModel):
+    db_backend: str
+    db_path: Optional[str] = None
+    postgresql_url: Optional[str] = None
+
+    @field_validator("db_backend")
+    @classmethod
+    def validate_backend(cls, value: str) -> str:
+        if value not in {"sqlite", "postgresql"}:
+            raise ValueError("db_backend must be sqlite or postgresql")
+        return value
 
 
 class SettingsOut(BaseModel):
@@ -85,6 +108,60 @@ async def get_settings(session: Session = Depends(get_session)) -> SettingsOut:
     """获取当前 settings，api_key 脱敏返回。"""
     s = _get_or_create_settings(session)
     return _to_out(s, session)
+
+
+@router.get("/database", response_model=DatabaseSettingsOut)
+async def get_database_settings() -> DatabaseSettingsOut:
+    """获取数据库后端配置。此接口不依赖数据库连接。"""
+    return DatabaseSettingsOut(**get_database_config())
+
+
+@router.put("/database", response_model=DatabaseSettingsOut)
+async def update_database_settings(body: DatabaseSettingsUpdate) -> DatabaseSettingsOut:
+    """热切换业务数据库。
+
+    这里不做数据迁移；目标库只会被升级到当前 schema。
+    """
+    db_path = (body.db_path or "").strip()
+    postgresql_url = (body.postgresql_url or "").strip()
+
+    if body.db_backend == "sqlite" and not db_path:
+        raise HTTPException(status_code=400, detail="选择 SQLite 时必须提供数据库文件路径")
+    if body.db_backend == "postgresql":
+        if not postgresql_url:
+            raise HTTPException(status_code=400, detail="选择 PostgreSQL 时必须提供连接 URL")
+        if not (
+            postgresql_url.startswith("postgresql://")
+            or postgresql_url.startswith("postgresql+psycopg2://")
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="PostgreSQL URL 必须以 postgresql:// 或 postgresql+psycopg2:// 开头",
+            )
+
+    target = build_database_config(
+        body.db_backend,
+        db_path or None,
+        postgresql_url or None,
+    )
+
+    await stop_background_worker()
+    try:
+        switched = switch_database(target)
+    except DatabaseConnectionError as exc:
+        await start_background_worker()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        await start_background_worker()
+        raise HTTPException(status_code=500, detail=f"数据库切换失败：{exc}") from exc
+    await start_background_worker()
+
+    return DatabaseSettingsOut(
+        db_backend=switched.db_backend,
+        db_path=switched.db_path,
+        postgresql_url=switched.postgresql_url,
+        restart_required=False,
+    )
 
 
 @router.put("", response_model=SettingsOut)

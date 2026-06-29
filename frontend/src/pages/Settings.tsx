@@ -1,9 +1,19 @@
 import { useEffect, useState } from 'react'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { useToast } from '../components/useToast'
+import { api, ApiError } from '../lib/api'
 import { useSparklingStore } from '../lib/store'
 
 const dims = [384, 768, 1024, 1536, 3072]
+
+type DatabaseBackend = 'sqlite' | 'postgresql'
+
+interface DatabaseSettingsRaw {
+  db_backend: DatabaseBackend
+  db_path?: string | null
+  postgresql_url?: string | null
+  restart_required: boolean
+}
 
 export default function Settings() {
   const { show } = useToast()
@@ -15,10 +25,16 @@ export default function Settings() {
   const [chatModel, setChatModel] = useState('gpt-4.1-mini')
   const [autoThreshold, setAutoThreshold] = useState(0.85)
   const [suggestThreshold, setSuggestThreshold] = useState(0.7)
+  const [dbBackend, setDbBackend] = useState<DatabaseBackend>('sqlite')
+  const [dbPath, setDbPath] = useState('./sparkling.db')
+  const [postgresqlUrl, setPostgresqlUrl] = useState('')
+  const [dbSaving, setDbSaving] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
   const [progress, setProgress] = useState(0)
+  const loadInitial = useSparklingStore((state) => state.loadInitial)
   const thresholdsValid = autoThreshold >= suggestThreshold + 0.05
+  const databaseValid = dbBackend === 'sqlite' ? dbPath.trim().length > 0 : postgresqlUrl.trim().length > 0
 
   useEffect(() => {
     if (!rebuilding) return
@@ -39,6 +55,20 @@ export default function Settings() {
     return () => window.clearInterval(timer)
   }, [rebuilding, show])
 
+  useEffect(() => {
+    void api
+      .get<DatabaseSettingsRaw>('/api/settings/database')
+      .then((settings) => {
+        setDbBackend(settings.db_backend)
+        setDbPath(settings.db_path ?? './sparkling.db')
+        setPostgresqlUrl(settings.postgresql_url ?? '')
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        show(`读取数据库设置失败：${message}`, 'error')
+      })
+  }, [show])
+
   const saveSettings = () => {
     // TODO(real-api): PUT /api/settings with provider and threshold values.
     show('设置已保存', 'success')
@@ -56,8 +86,100 @@ export default function Settings() {
     setRebuilding(true)
   }
 
+  const saveDatabaseSettings = async () => {
+    if (!databaseValid) {
+      show(dbBackend === 'sqlite' ? '请填写 SQLite 数据库路径' : '请填写 PostgreSQL URL', 'warning')
+      return
+    }
+
+    setDbSaving(true)
+    try {
+      const next = await api.put<DatabaseSettingsRaw>('/api/settings/database', {
+        db_backend: dbBackend,
+        db_path: dbPath.trim(),
+        postgresql_url: postgresqlUrl.trim(),
+      })
+      setDbBackend(next.db_backend)
+      setDbPath(next.db_path ?? './sparkling.db')
+      setPostgresqlUrl(next.postgresql_url ?? '')
+      await loadInitial()
+      show('数据库已切换；不会迁移已有数据', 'success')
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(message, 'error')
+    } finally {
+      setDbSaving(false)
+    }
+  }
+
   return (
     <div className="mx-auto max-w-4xl space-y-6 px-4 py-6 md:px-6">
+      <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+        <h1 className="text-lg font-semibold text-slate-100">数据库</h1>
+        <div className="mt-4 flex w-fit overflow-hidden rounded-md border border-slate-700">
+          <button
+            type="button"
+            onClick={() => setDbBackend('sqlite')}
+            className={`px-4 py-2 text-sm transition ${
+              dbBackend === 'sqlite'
+                ? 'bg-slate-700 text-slate-100'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+            }`}
+          >
+            SQLite
+          </button>
+          <button
+            type="button"
+            onClick={() => setDbBackend('postgresql')}
+            className={`border-l border-slate-700 px-4 py-2 text-sm transition ${
+              dbBackend === 'postgresql'
+                ? 'bg-slate-700 text-slate-100'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+            }`}
+          >
+            PostgreSQL
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-4">
+          {dbBackend === 'sqlite' ? (
+            <label className="text-sm text-slate-400">
+              SQLite DB Path
+              <input
+                value={dbPath}
+                onChange={(event) => setDbPath(event.target.value)}
+                className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:border-violet-400"
+              />
+            </label>
+          ) : (
+            <label className="text-sm text-slate-400">
+              PostgreSQL URL
+              <input
+                value={postgresqlUrl}
+                onChange={(event) => setPostgresqlUrl(event.target.value)}
+                placeholder="postgresql://user:password@localhost:5432/sparkling"
+                className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:border-violet-400"
+              />
+            </label>
+          )}
+        </div>
+
+        <div className="mt-4 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-400">
+          切换会立即连接目标数据库并升级 schema；现有数据不会自动迁移。
+        </div>
+
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            disabled={!databaseValid || dbSaving}
+            onClick={() => void saveDatabaseSettings()}
+            className="rounded-md bg-violet-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+          >
+            {dbSaving ? '切换中…' : '切换数据库'}
+          </button>
+        </div>
+      </section>
+
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
         <h1 className="text-lg font-semibold text-slate-100">AI Provider</h1>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -74,7 +196,25 @@ export default function Settings() {
             <input value={embedModel} onChange={(event) => setEmbedModel(event.target.value)} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400" />
           </label>
           <label className="text-sm text-slate-400">
-            Embed Dim
+            <span className="group relative inline-flex items-center gap-1.5">
+              Embed Dim
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+                className="h-3.5 w-3.5 cursor-help text-slate-500 transition hover:text-slate-300"
+                aria-hidden="true"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14ZM8.93 6.588a2.065 2.065 0 0 0-1.947.319.75.75 0 1 1-.868-1.224 3.565 3.565 0 0 1 3.365-.55c.837.319 1.42 1.008 1.42 1.867 0 1.03-.669 1.764-1.318 2.26-.33.25-.697.464-.93.596v.394a.75.75 0 0 1-1.5 0V9.75c0-.613.377-1.079.865-1.442.259-.193.58-.4.819-.58C9.29 7.394 9.4 7.096 9.4 7c0-.37-.183-.58-.47-.693a2.065 2.065 0 0 0-.93-.28 2.06 2.06 0 0 0-.07-.007ZM8 12a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z"
+                  clipRule="evenodd"
+                />
+              </svg>
+              <span className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden w-64 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs leading-relaxed text-slate-300 shadow-xl group-hover:block">
+                Embedding 向量的维度。维度越高，语义表示越精细，能捕捉更多细微关联，但计算与存储开销也越大。需与所选模型支持的维度匹配，通常为 384、768、1024、1536 或 3072。
+              </span>
+            </span>
             <select value={embedDim} onChange={(event) => setEmbedDim(Number(event.target.value))} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400">
               {dims.map((dim) => (
                 <option key={dim} value={dim}>
