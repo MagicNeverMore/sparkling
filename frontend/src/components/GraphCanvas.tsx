@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Graph, NodeEvent, CanvasEvent } from '@antv/g6'
 import type { IElementEvent } from '@antv/g6'
 import type { AtomMock, LinkMock } from '../lib/mock'
@@ -66,6 +66,8 @@ const getSecondDegreeIds = (atomId: string, links: LinkMock[]) => {
 export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const graphRef = useRef<Graph | null>(null)
+  const graphLifecycleRef = useRef(0)
+  const graphTaskQueueRef = useRef<Promise<void>>(Promise.resolve())
 
   // Ref 存储最新的 degree map，供 G6 样式函数（在 init 闭包中）使用
   const degreeMapRef = useRef(new Map<string, number>())
@@ -108,10 +110,34 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     }
   }
 
+  const isActiveGraph = useCallback((graph: Graph, lifecycleId: number) => {
+    return graphRef.current === graph && graphLifecycleRef.current === lifecycleId && !graph.destroyed
+  }, [])
+
+  const runGraphTask = useCallback((
+    task: (graph: Graph, lifecycleId: number) => Promise<void> | void,
+  ) => {
+    const graph = graphRef.current
+    const lifecycleId = graphLifecycleRef.current
+    if (!graph || graph.destroyed) return
+
+    graphTaskQueueRef.current = graphTaskQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (!isActiveGraph(graph, lifecycleId)) return
+        await task(graph, lifecycleId)
+      })
+      .catch(() => undefined)
+  }, [isActiveGraph])
+
   // 初始化 G6 图实例（仅一次）
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+
+    const lifecycleId = graphLifecycleRef.current + 1
+    graphLifecycleRef.current = lifecycleId
+    graphTaskQueueRef.current = Promise.resolve()
 
     const graph = new Graph({
       container,
@@ -211,12 +237,14 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       clearTooltipTimer()
       const id = (e.target as { id: string }).id
       try {
+        if (!isActiveGraph(graph, lifecycleId)) return
         const nodeData = graph.getNodeData(id)
         const rect = container.getBoundingClientRect()
         // G6 的 FederatedPointerEvent 透传 clientX/clientY
         const clientX = (e as unknown as PointerEvent).clientX ?? 0
         const clientY = (e as unknown as PointerEvent).clientY ?? 0
         tooltipTimerRef.current = setTimeout(() => {
+          if (!isActiveGraph(graph, lifecycleId)) return
           setTooltip({
             content: (nodeData.data?.content as string) ?? '',
             degree: degreeMapRef.current.get(id) ?? 0,
@@ -235,91 +263,103 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     })
 
     return () => {
-      graph.destroy()
-      graphRef.current = null
+      clearTooltipTimer()
+      graphLifecycleRef.current += 1
+      if (graphRef.current === graph) graphRef.current = null
+      void graphTaskQueueRef.current
+        .catch(() => undefined)
+        .finally(() => {
+          if (!graph.destroyed) graph.destroy()
+        })
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isActiveGraph])
 
   // 数据变化时更新图（re-render 重新布局）
   useEffect(() => {
-    const graph = graphRef.current
-    if (!graph) return
+    runGraphTask(async (graph, lifecycleId) => {
+      graph.setData({
+        nodes: atoms.map((a) => ({ id: a.id, data: { content: a.content } })),
+        edges: links.map((l) => ({
+          id: l.id,
+          source: l.fromAtomId,
+          target: l.toAtomId,
+          data: { userConfirmed: l.userConfirmed, confidence: l.confidence },
+        })),
+      })
 
-    graph.setData({
-      nodes: atoms.map((a) => ({ id: a.id, data: { content: a.content } })),
-      edges: links.map((l) => ({
-        id: l.id,
-        source: l.fromAtomId,
-        target: l.toAtomId,
-        data: { userConfirmed: l.userConfirmed, confidence: l.confidence },
-      })),
-    })
+      await graph.render()
+      if (!isActiveGraph(graph, lifecycleId)) return
 
-    void graph.render().then(async () => {
       if (isFirstRenderRef.current) {
         isFirstRenderRef.current = false
         // 先无动画 fitView，再无动画缩至 70%，一步到位不闪烁
         await graph.fitView(undefined, false)
+        if (!isActiveGraph(graph, lifecycleId)) return
         const fitted = graph.getZoom()
         await graph.zoomTo(Math.max(fitted * 0.63, 0.15), false)
+        if (!isActiveGraph(graph, lifecycleId)) return
       }
       const sid = selectedIdRef.current
-      if (sid) void graph.setElementState(sid, ['selected'])
+      if (sid) await graph.setElementState(sid, ['selected'])
     })
-  }, [atoms, links])
+  }, [atoms, links, isActiveGraph, runGraphTask])
 
   // selectedId 变化时更新 G6 状态
   useEffect(() => {
-    const graph = graphRef.current
-    if (!graph || !graph.rendered) return
+    runGraphTask(async (graph) => {
+      if (!graph.rendered) return
 
-    // 全量更新：先清除所有，再设置选中
-    const stateMap: Record<string, string[]> = {}
-    atoms.forEach((a) => { stateMap[a.id] = [] })
-    if (selectedId) stateMap[selectedId] = ['selected']
-    void graph.setElementState(stateMap)
-  }, [selectedId, atoms])
+      // 全量更新：先清除所有，再设置选中
+      const stateMap: Record<string, string[]> = {}
+      atoms.forEach((a) => { stateMap[a.id] = [] })
+      if (selectedId) stateMap[selectedId] = ['selected']
+      await graph.setElementState(stateMap)
+    })
+  }, [selectedId, atoms, runGraphTask])
 
   // mode / focusId 变化：显示/隐藏节点和边
   useEffect(() => {
-    const graph = graphRef.current
-    if (!graph || !graph.rendered) return
+    runGraphTask(async (graph) => {
+      if (!graph.rendered) return
 
-    if (mode === 'all' || !focusId) {
-      graph.updateNodeData(atoms.map((a) => ({ id: a.id, style: { visibility: 'visible' as const } })))
-      graph.updateEdgeData(links.map((l) => ({ id: l.id, style: { visibility: 'visible' as const } })))
-    } else {
-      const visibleNodeIds = getSecondDegreeIds(focusId, links)
-      const visibleEdgeIds = new Set(
-        links
-          .filter((l) => visibleNodeIds.has(l.fromAtomId) && visibleNodeIds.has(l.toAtomId))
-          .map((l) => l.id),
-      )
-      graph.updateNodeData(
-        atoms.map((a) => ({
-          id: a.id,
-          style: { visibility: (visibleNodeIds.has(a.id) ? 'visible' : 'hidden') as 'visible' | 'hidden' },
-        })),
-      )
-      graph.updateEdgeData(
-        links.map((l) => ({
-          id: l.id,
-          style: { visibility: (visibleEdgeIds.has(l.id) ? 'visible' : 'hidden') as 'visible' | 'hidden' },
-        })),
-      )
-    }
-    void graph.draw()
-  }, [mode, focusId, atoms, links])
+      if (mode === 'all' || !focusId) {
+        graph.updateNodeData(atoms.map((a) => ({ id: a.id, style: { visibility: 'visible' as const } })))
+        graph.updateEdgeData(links.map((l) => ({ id: l.id, style: { visibility: 'visible' as const } })))
+      } else {
+        const visibleNodeIds = getSecondDegreeIds(focusId, links)
+        const visibleEdgeIds = new Set(
+          links
+            .filter((l) => visibleNodeIds.has(l.fromAtomId) && visibleNodeIds.has(l.toAtomId))
+            .map((l) => l.id),
+        )
+        graph.updateNodeData(
+          atoms.map((a) => ({
+            id: a.id,
+            style: { visibility: (visibleNodeIds.has(a.id) ? 'visible' : 'hidden') as 'visible' | 'hidden' },
+          })),
+        )
+        graph.updateEdgeData(
+          links.map((l) => ({
+            id: l.id,
+            style: { visibility: (visibleEdgeIds.has(l.id) ? 'visible' : 'hidden') as 'visible' | 'hidden' },
+          })),
+        )
+      }
+      await graph.draw()
+    })
+  }, [mode, focusId, atoms, links, runGraphTask])
 
   // 搜索：定位到第一个匹配节点
   useEffect(() => {
-    const graph = graphRef.current
-    if (!graph || !graph.rendered) return
     const q = query.trim().toLowerCase()
     if (!q) return
     const match = atoms.find((a) => a.content.toLowerCase().includes(q))
-    if (match) void graph.focusElement(match.id, { duration: 400 })
-  }, [query, atoms])
+    if (!match) return
+    runGraphTask(async (graph) => {
+      if (!graph.rendered) return
+      await graph.focusElement(match.id, { duration: 400 })
+    })
+  }, [query, atoms, runGraphTask])
 
   return (
     <div className="relative h-full min-h-[calc(100vh-3rem)] bg-slate-950 md:min-h-screen">
@@ -360,7 +400,9 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
           onClick={() => {
             setMode('all')
             setFocusId(null)
-            void graphRef.current?.fitView()
+            runGraphTask(async (graph) => {
+              if (graph.rendered) await graph.fitView()
+            })
           }}
           className="rounded-md px-3 py-1.5 text-sm text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
         >
@@ -368,7 +410,11 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
         </button>
         <button
           type="button"
-          onClick={() => void graphRef.current?.fitView()}
+          onClick={() => {
+            runGraphTask(async (graph) => {
+              if (graph.rendered) await graph.fitView()
+            })
+          }}
           className="rounded-md px-3 py-1.5 text-sm text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
         >
           适应
