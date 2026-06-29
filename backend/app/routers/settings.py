@@ -1,4 +1,4 @@
-"""Settings 路由：AI provider 配置、连通性测试、embedding 重建。"""
+"""Settings 路由：AI provider 配置（Embedding / Chat 分离）、连通性测试、embedding 重建。"""
 from __future__ import annotations
 
 from typing import Optional
@@ -13,16 +13,19 @@ from ..runtime import start_background_worker, stop_background_worker
 from ..services import task_queue as tq
 from ..services.runtime_config import build_database_config, get_database_config
 from ..services.embedding import test_provider
+from ..services.chat import test_chat_provider
 from ..vector_store import create_vec_table, ensure_vec_table
 
 router = APIRouter()
 
 
 class SettingsUpdate(BaseModel):
-    ai_base_url: Optional[str] = None
-    ai_api_key: Optional[str] = None      # 传空字符串 = 清除
+    embed_base_url: Optional[str] = None
+    embed_api_key: Optional[str] = None   # 传空字符串 = 清除（embed_api_key 可为空）
     embed_model: Optional[str] = None
     embed_dim: Optional[int] = None
+    chat_base_url: Optional[str] = None
+    chat_api_key: Optional[str] = None    # 传空字符串 = 清除
     chat_model: Optional[str] = None
     link_threshold_auto: Optional[float] = None
     link_threshold_suggest: Optional[float] = None
@@ -49,11 +52,13 @@ class DatabaseSettingsUpdate(BaseModel):
 
 
 class SettingsOut(BaseModel):
-    ai_base_url: Optional[str]
-    ai_api_key_masked: Optional[str]       # 脱敏：仅展示后四位
+    embed_base_url: Optional[str]
+    embed_api_key_masked: Optional[str]   # 脱敏：仅展示后四位
     embed_model: Optional[str]
     embed_dim: Optional[int]
-    embed_dim_locked: bool                 # embed_dim 已锁定（有 embedding 数据）
+    embed_dim_locked: bool                # embed_dim 已锁定（有 embedding 数据）
+    chat_base_url: Optional[str]
+    chat_api_key_masked: Optional[str]    # 脱敏：仅展示后四位
     chat_model: Optional[str]
     link_threshold_auto: float
     link_threshold_suggest: float
@@ -92,11 +97,13 @@ def _is_embed_dim_locked(session: Session) -> bool:
 
 def _to_out(s: Settings, session: Session) -> SettingsOut:
     return SettingsOut(
-        ai_base_url=s.ai_base_url,
-        ai_api_key_masked=_mask_key(s.ai_api_key),
+        embed_base_url=s.embed_base_url,
+        embed_api_key_masked=_mask_key(s.embed_api_key),
         embed_model=s.embed_model,
         embed_dim=s.embed_dim,
         embed_dim_locked=_is_embed_dim_locked(session),
+        chat_base_url=s.chat_base_url,
+        chat_api_key_masked=_mask_key(s.chat_api_key),
         chat_model=s.chat_model,
         link_threshold_auto=s.link_threshold_auto,
         link_threshold_suggest=s.link_threshold_suggest,
@@ -182,14 +189,18 @@ async def update_settings(
         # 首次设置 embed_dim，建表
         ensure_vec_table(body.embed_dim)
 
-    if body.ai_base_url is not None:
-        s.ai_base_url = body.ai_base_url or None
-    if body.ai_api_key is not None:
-        s.ai_api_key = body.ai_api_key or None
+    if body.embed_base_url is not None:
+        s.embed_base_url = body.embed_base_url or None
+    if body.embed_api_key is not None:
+        s.embed_api_key = body.embed_api_key or None
     if body.embed_model is not None:
         s.embed_model = body.embed_model or None
     if body.embed_dim is not None:
         s.embed_dim = body.embed_dim
+    if body.chat_base_url is not None:
+        s.chat_base_url = body.chat_base_url or None
+    if body.chat_api_key is not None:
+        s.chat_api_key = body.chat_api_key or None
     if body.chat_model is not None:
         s.chat_model = body.chat_model or None
     if body.link_threshold_auto is not None:
@@ -206,12 +217,25 @@ async def update_settings(
 async def test_provider_endpoint(
     session: Session = Depends(get_session),
 ) -> TestProviderResult:
-    """测试当前 AI provider 连通性（发送一条 embedding 请求并计时）。"""
+    """测试 Embedding provider 连通性（发送一条 embedding 请求并计时）。"""
     s = _get_or_create_settings(session)
     if not s.embed_model:
         raise HTTPException(status_code=400, detail="请先配置 embed_model")
 
     ok, latency_ms, error = await test_provider(s)
+    return TestProviderResult(ok=ok, latency_ms=latency_ms, error=error)
+
+
+@router.post("/test-chat-provider", response_model=TestProviderResult)
+async def test_chat_provider_endpoint(
+    session: Session = Depends(get_session),
+) -> TestProviderResult:
+    """测试 Chat provider 连通性（发送一条 chat 请求并计时）。"""
+    s = _get_or_create_settings(session)
+    if not s.chat_model:
+        raise HTTPException(status_code=400, detail="请先配置 chat_model")
+
+    ok, latency_ms, error = await test_chat_provider(s)
     return TestProviderResult(ok=ok, latency_ms=latency_ms, error=error)
 
 
@@ -232,10 +256,10 @@ async def rebuild_embeddings(
         raise HTTPException(status_code=400, detail="请先配置 embed_dim")
 
     # 应用其他 settings 更新
-    if body.ai_base_url is not None:
-        s.ai_base_url = body.ai_base_url or None
-    if body.ai_api_key is not None:
-        s.ai_api_key = body.ai_api_key or None
+    if body.embed_base_url is not None:
+        s.embed_base_url = body.embed_base_url or None
+    if body.embed_api_key is not None:
+        s.embed_api_key = body.embed_api_key or None
     if body.embed_model is not None:
         s.embed_model = body.embed_model or None
     if body.embed_dim is not None:

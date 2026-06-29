@@ -39,8 +39,8 @@ _vec_table_lock = asyncio.Lock()
 def _get_client(settings: Settings) -> AsyncOpenAI:
     """根据 Settings 构造 OpenAI 兼容客户端，支持多家 provider。"""
     return AsyncOpenAI(
-        api_key=settings.ai_api_key or "not-set",
-        base_url=settings.ai_base_url or None,
+        api_key=settings.embed_api_key or "not-set",
+        base_url=settings.embed_base_url or None,
     )
 
 
