@@ -5,15 +5,20 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from .config import config
+from .db import engine
 from .routers import atoms, graph, links, search, settings, tasks, ws
 from .workers.runner import start_worker, stop_worker
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # 启动后台异步 worker（同进程）
+    # 首次启动时启用 WAL 模式，提升读写并发性能
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL"))
+        conn.execute(text("PRAGMA synchronous=NORMAL"))
     task = await start_worker()
     try:
         yield

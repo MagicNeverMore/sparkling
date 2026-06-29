@@ -11,7 +11,7 @@ from app import models  # noqa: F401  # 触发模型注册
 
 config = context.config
 # 覆盖 alembic.ini 中的占位 URL
-config.set_main_option("sqlalchemy.url", f"sqlite:///{app_config.db_path}")
+config.set_main_option("sqlalchemy.url", app_config.sqlalchemy_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -23,7 +23,7 @@ class Base(DeclarativeBase):
 
 # SQLite 在多线程下需要 check_same_thread=False；FastAPI 使用同步 ORM 时由 session 隔离
 engine = create_engine(
-    f"sqlite:///{config.db_path}",
+    config.sqlalchemy_url,
     connect_args={"check_same_thread": False},
     future=True,
 )

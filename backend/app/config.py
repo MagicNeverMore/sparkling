@@ -4,26 +4,42 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-def _default_db_path() -> str:
-    # 默认本地 SQLite 路径，可被环境变量覆盖
-    path = Path(os.path.expanduser("~/.sparkling/sparkling.db"))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return str(path)
+BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 class AppConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="SPARKLING_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="SPARKLING_",
+        env_file=BACKEND_DIR / ".env",
+        extra="ignore",
+    )
 
-    # SQLite 文件路径
-    db_path: str = _default_db_path()
-    # 监听地址（自托管单用户默认 127.0.0.1）
-    host: str = "127.0.0.1"
-    port: int = 8000
-    # CORS 允许的前端 dev 源
-    dev_origin: str = "http://localhost:5173"
+    db_path: str
+    host: str
+    port: int
+    dev_origin: str
+
+    @field_validator("db_path")
+    @classmethod
+    def normalize_db_path(cls, value: str) -> str:
+        """SPARKLING_DB_PATH 是文件路径，不是 SQLAlchemy URL。"""
+        if value.startswith("sqlite:"):
+            msg = "SPARKLING_DB_PATH must be a filesystem path, not a SQLAlchemy URL"
+            raise ValueError(msg)
+        path = Path(os.path.expanduser(value))
+        if not path.is_absolute():
+            path = BACKEND_DIR / path
+        path = path.resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return str(path)
+
+    @property
+    def sqlalchemy_url(self) -> str:
+        return f"sqlite:///{self.db_path}"
 
 
 config = AppConfig()

@@ -8,12 +8,12 @@ import Settings from './pages/Settings'
 import Tasks from './pages/Tasks'
 import AtomDetail from './pages/AtomDetail'
 import { ToastProvider } from './components/useToast'
-import { useMockWs } from './lib/useMockWs'
+import { useWs } from './lib/useWs'
 import { useSparklingStore } from './lib/store'
 
 function AppRoutes() {
   const loadInitial = useSparklingStore((state) => state.loadInitial)
-  useMockWs()
+  useWs()
   useEffect(() => {
     void loadInitial()
   }, [loadInitial])

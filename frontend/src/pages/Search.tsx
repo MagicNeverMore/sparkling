@@ -1,8 +1,23 @@
 import { useEffect, useState } from 'react'
 import AtomCard from '../components/AtomCard'
 import EmptyState from '../components/EmptyState'
-import { mockApi, type SearchResultMock } from '../lib/mock'
+import { api } from '../lib/api'
+import { type SearchResultMock } from '../lib/mock'
 import { useSparklingStore } from '../lib/store'
+
+// 后端 /api/search 返回的原始类型
+interface SearchRaw {
+  atom: {
+    id: string
+    content: string
+    content_type: string
+    status: string
+    version: number
+    created_at: string
+    updated_at: string
+  }
+  score: number
+}
 
 export default function Search() {
   const [query, setQuery] = useState('')
@@ -19,11 +34,24 @@ export default function Search() {
         return
       }
       setSearching(true)
-      // TODO(real-api): GET /api/search?q=... and map backend scores into SearchResultMock.
-      void mockApi.search(q).then((next) => {
-        setResults(next)
-        setSearching(false)
-      })
+      void api
+        .get<SearchRaw[]>(`/api/search?q=${encodeURIComponent(q)}`)
+        .then((raw) => {
+          const next: SearchResultMock[] = raw.map((r) => ({
+            atom: {
+              id: r.atom.id,
+              content: r.atom.content,
+              status: r.atom.status as SearchResultMock['atom']['status'],
+              version: r.atom.version,
+              createdAt: r.atom.created_at,
+              updatedAt: r.atom.updated_at,
+            },
+            score: r.score,
+          }))
+          setResults(next)
+          setSearching(false)
+        })
+        .catch(() => setSearching(false))
     }, 300)
     return () => window.clearTimeout(handle)
   }, [query])
