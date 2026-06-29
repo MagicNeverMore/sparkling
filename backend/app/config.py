@@ -33,9 +33,7 @@ class AppConfig(BaseSettings):
         path = Path(os.path.expanduser(value))
         if not path.is_absolute():
             path = BACKEND_DIR / path
-        path = path.resolve()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return str(path)
+        return str(path.resolve())
 
     @property
     def sqlalchemy_url(self) -> str:

@@ -15,6 +15,7 @@ export default function AtomDetail() {
   const links = useSparklingStore((state) => state.links)
   const loading = useSparklingStore((state) => state.loading)
   const updateAtom = useSparklingStore((state) => state.updateAtom)
+  const deleteAtom = useSparklingStore((state) => state.deleteAtom)
   const confirmLink = useSparklingStore((state) => state.confirmLink)
   const ignoreLink = useSparklingStore((state) => state.ignoreLink)
   const loadInitial = useSparklingStore((state) => state.loadInitial)
@@ -51,10 +52,18 @@ export default function AtomDetail() {
   const save = async () => {
     if (!atom) return
     const next = draft.trim()
-    setEditing(false)
-    if (!next || next === atom.content) return
+    if (!next) {
+      show('内容不能为空', 'warning')
+      return
+    }
+    if (next === atom.content) {
+      setEditing(false)
+      return
+    }
     try {
       await updateAtom(atom.id, { content: next })
+      setEditing(false)
+      show('已保存', 'success')
     } catch (error) {
       if (error instanceof ConflictError) {
         show('版本冲突，已重新加载最新内容', 'warning')
@@ -62,6 +71,18 @@ export default function AtomDetail() {
         return
       }
       show('保存失败', 'error')
+    }
+  }
+
+  const remove = async () => {
+    if (!atom) return
+    if (!window.confirm('删除后会保留 30 天，之后自动清理。确认删除？')) return
+    try {
+      await deleteAtom(atom.id)
+      show('已删除', 'info')
+      navigate('/inbox', { replace: true })
+    } catch {
+      show('删除失败', 'error')
     }
   }
 
@@ -88,12 +109,38 @@ export default function AtomDetail() {
           ← 返回
         </button>
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+          <div className="mb-4 flex flex-wrap justify-end gap-2">
+            {!editing && (
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800"
+              >
+                变更
+              </button>
+            )}
+            {editing && (
+              <button
+                type="button"
+                onClick={() => void save()}
+                className="rounded-md bg-violet-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-violet-400"
+              >
+                保存
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void remove()}
+              className="rounded-md border border-rose-900/70 px-3 py-2 text-sm text-rose-300 transition hover:bg-rose-950/60 hover:text-rose-100"
+            >
+              删除
+            </button>
+          </div>
           {editing ? (
             <textarea
               ref={textareaRef}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              onBlur={() => void save()}
               className="min-h-48 w-full resize-none bg-transparent text-2xl leading-10 text-slate-100 outline-none"
             />
           ) : (

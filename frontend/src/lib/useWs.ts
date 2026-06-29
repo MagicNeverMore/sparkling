@@ -12,11 +12,16 @@ interface LinkEventData {
   user_confirmed: boolean
 }
 
+interface AtomDeletedEventData {
+  id: string
+}
+
 const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
 const RECONNECT_DELAY = 3_000
 
 export const useWs = () => {
   const pushSuggestion = useSparklingStore((state) => state.pushSuggestion)
+  const removeAtomLocally = useSparklingStore((state) => state.removeAtomLocally)
   const setWsStatus = useSparklingStore((state) => state.setWsStatus)
   // useRef 保存 ws 实例和重连 timer，避免闭包陈旧引用
   const wsRef = useRef<WebSocket | null>(null)
@@ -50,6 +55,9 @@ export const useWs = () => {
               userConfirmed: d.user_confirmed,
             }
             pushSuggestion(link)
+          } else if (msg.type === 'atom.deleted') {
+            const d = msg.data as AtomDeletedEventData
+            removeAtomLocally(d.id)
           }
         } catch {
           // 忽略非 JSON 消息
@@ -76,5 +84,5 @@ export const useWs = () => {
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [pushSuggestion, setWsStatus])
+  }, [pushSuggestion, removeAtomLocally, setWsStatus])
 }

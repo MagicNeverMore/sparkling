@@ -1,6 +1,7 @@
 import AtomCard from '../components/AtomCard'
 import EmptyState from '../components/EmptyState'
 import QuickInput from '../components/QuickInput'
+import { useToast } from '../components/useToast'
 import { groupAtomsByTime } from '../lib/time'
 import { useSparklingStore } from '../lib/store'
 
@@ -11,7 +12,18 @@ export default function Inbox() {
   const links = useSparklingStore((state) => state.links)
   const loading = useSparklingStore((state) => state.loading)
   const addAtom = useSparklingStore((state) => state.addAtom)
+  const deleteAtom = useSparklingStore((state) => state.deleteAtom)
+  const { show } = useToast()
   const groups = groupAtomsByTime(atoms)
+
+  const removeAtom = async (id: string) => {
+    try {
+      await deleteAtom(id)
+      show('已删除', 'info')
+    } catch {
+      show('删除失败', 'error')
+    }
+  }
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6 md:px-6">
@@ -32,7 +44,7 @@ export default function Inbox() {
               <h2 className="mb-3 text-xs uppercase tracking-wide text-slate-500">{label}</h2>
               <div className="space-y-3">
                 {items.map((atom) => (
-                  <AtomCard key={atom.id} atom={atom} links={links} />
+                  <AtomCard key={atom.id} atom={atom} links={links} onDelete={(id) => void removeAtom(id)} />
                 ))}
               </div>
             </section>

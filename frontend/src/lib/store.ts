@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { ConflictError, type AtomMock, type LinkMock } from './mock'
-import { api } from './api'
+import { api, ApiError } from './api'
 
 // 后端 API 原始响应类型（snake_case）
 interface AtomRaw {
@@ -47,13 +47,16 @@ interface State {
   atoms: AtomMock[]
   links: LinkMock[]
   loading: boolean
+  errorMessage: string | null
   wsStatus: 'online' | 'reconnecting' | 'offline'
   loadInitial: () => Promise<void>
   addAtom: (content: string) => Promise<void>
   updateAtom: (id: string, patch: Partial<AtomMock>) => Promise<void>
+  deleteAtom: (id: string) => Promise<void>
   confirmLink: (id: string) => Promise<void>
   ignoreLink: (id: string) => Promise<void>
   pushSuggestion: (link: LinkMock) => void
+  removeAtomLocally: (id: string) => void
   setWsStatus: (status: State['wsStatus']) => void
 }
 
@@ -61,15 +64,21 @@ export const useSparklingStore = create<State>((set, get) => ({
   atoms: [],
   links: [],
   loading: true,
+  errorMessage: null,
   wsStatus: 'online',
 
   loadInitial: async () => {
-    set({ loading: true })
-    const [rawAtoms, rawLinks] = await Promise.all([
-      api.get<AtomRaw[]>('/api/atoms'),
-      api.get<LinkRaw[]>('/api/links'),
-    ])
-    set({ atoms: rawAtoms.map(fromAtomRaw), links: rawLinks.map(fromLinkRaw), loading: false })
+    set({ loading: true, errorMessage: null })
+    try {
+      const [rawAtoms, rawLinks] = await Promise.all([
+        api.get<AtomRaw[]>('/api/atoms'),
+        api.get<LinkRaw[]>('/api/links'),
+      ])
+      set({ atoms: rawAtoms.map(fromAtomRaw), links: rawLinks.map(fromLinkRaw), loading: false })
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      set({ loading: false, errorMessage: message })
+    }
   },
 
   addAtom: async (content: string) => {
@@ -91,7 +100,22 @@ export const useSparklingStore = create<State>((set, get) => ({
       set((state) => ({ atoms: state.atoms.map((atom) => (atom.id === id ? updated : atom)) }))
     } catch (error) {
       // 409 版本冲突转换为 ConflictError，供 AtomDetail 捕获并提示
-      if (error instanceof Error && error.message.startsWith('409')) throw new ConflictError()
+      if (error instanceof ApiError && error.status === 409) throw new ConflictError()
+      throw error
+    }
+  },
+
+  deleteAtom: async (id: string) => {
+    const previousAtoms = get().atoms
+    const previousLinks = get().links
+    set((state) => ({
+      atoms: state.atoms.filter((atom) => atom.id !== id),
+      links: state.links.filter((link) => link.fromAtomId !== id && link.toAtomId !== id),
+    }))
+    try {
+      await api.del(`/api/atoms/${id}`)
+    } catch (error) {
+      set({ atoms: previousAtoms, links: previousLinks })
       throw error
     }
   },
@@ -121,6 +145,13 @@ export const useSparklingStore = create<State>((set, get) => ({
       if (state.links.some((item) => item.id === link.id)) return state
       return { links: [link, ...state.links] }
     })
+  },
+
+  removeAtomLocally: (id: string) => {
+    set((state) => ({
+      atoms: state.atoms.filter((atom) => atom.id !== id),
+      links: state.links.filter((link) => link.fromAtomId !== id && link.toAtomId !== id),
+    }))
   },
 
   setWsStatus: (wsStatus) => set({ wsStatus }),

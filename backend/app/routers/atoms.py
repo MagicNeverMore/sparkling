@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Iterator, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -140,3 +140,4 @@ async def delete_atom(
     atom.deleted_at = datetime.utcnow()
     atom.updated_at = datetime.utcnow()
     session.commit()
+    await manager.broadcast("atom.deleted", {"id": atom.id})

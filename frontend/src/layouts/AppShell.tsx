@@ -11,6 +11,7 @@ interface Props {
 export default function AppShell({ children }: Props) {
   const atoms = useSparklingStore((state) => state.atoms)
   const wsStatus = useSparklingStore((state) => state.wsStatus)
+  const errorMessage = useSparklingStore((state) => state.errorMessage)
 
   const [navCollapsed, setNavCollapsed] = useState(() => {
     return localStorage.getItem('sparkling-nav-collapsed') === 'true'
@@ -33,7 +34,19 @@ export default function AppShell({ children }: Props) {
           <span className="text-sm font-semibold">✨ Sparkling</span>
           <ConnectionDot status={wsStatus} />
         </header>
-        <main className="min-h-0 flex-1 overflow-auto pb-20 md:pb-0">{children}</main>
+        <main className="min-h-0 flex-1 overflow-auto pb-20 md:pb-0">
+          {errorMessage && (
+            <div className="border-b border-rose-900/60 bg-rose-950/60 px-4 py-3 text-sm text-rose-100 md:px-6">
+              <div className="mx-auto flex max-w-5xl items-start gap-3">
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-rose-400 text-xs font-semibold text-rose-200">
+                  !
+                </span>
+                <p className="min-w-0 break-words">{errorMessage}</p>
+              </div>
+            </div>
+          )}
+          {children}
+        </main>
       </div>
       <BottomTabBar />
     </div>

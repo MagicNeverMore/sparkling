@@ -4,10 +4,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timedelta
 from typing import Optional
 
 from ..db import SessionLocal
 from ..models import Settings
+from ..services.cleanup import purge_expired_deleted_atoms
 from ..services import task_queue as tq
 from ..services.embedding import embed_atom
 from ..services.linker import discover_links
@@ -18,6 +20,7 @@ logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
 # 无新任务时的兜底轮询间隔（秒），防止 wakeup event 丢失
 POLL_INTERVAL = 30.0
+CLEANUP_INTERVAL = timedelta(hours=24)
 
 
 async def _handle_embed(session, payload: dict, settings: Settings) -> None:
@@ -56,8 +59,15 @@ async def _worker_loop() -> None:
     """
     event = tq.get_wakeup_event()
     logger.info("Sparkling worker 已启动")
+    last_cleanup_at: datetime | None = None
 
     while True:
+        now = datetime.utcnow()
+        if last_cleanup_at is None or now - last_cleanup_at >= CLEANUP_INTERVAL:
+            with SessionLocal() as session:
+                purge_expired_deleted_atoms(session)
+            last_cleanup_at = now
+
         try:
             await asyncio.wait_for(event.wait(), timeout=POLL_INTERVAL)
         except asyncio.TimeoutError:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from typing import Iterator
+from urllib.parse import quote
 
 import sqlite_vec
 from sqlalchemy import create_engine, event
@@ -21,10 +22,16 @@ class Base(DeclarativeBase):
     pass
 
 
+def _connect_existing_db() -> sqlite3.Connection:
+    """只连接已有 SQLite 文件，避免路径错误时静默创建新数据库。"""
+    db_uri = f"file:{quote(config.db_path)}?mode=rw"
+    return sqlite3.connect(db_uri, uri=True, check_same_thread=False)
+
+
 # SQLite 在多线程下需要 check_same_thread=False；FastAPI 使用同步 ORM 时由 session 隔离
 engine = create_engine(
-    config.sqlalchemy_url,
-    connect_args={"check_same_thread": False},
+    "sqlite://",
+    creator=_connect_existing_db,
     future=True,
 )
 
@@ -54,7 +61,7 @@ def get_session() -> Iterator[Session]:
 @contextmanager
 def get_raw_conn() -> Iterator[sqlite3.Connection]:
     """获取原生 sqlite3 连接（用于 sqlite-vec 虚表 SQL）。"""
-    conn = sqlite3.connect(config.db_path)
+    conn = _connect_existing_db()
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)

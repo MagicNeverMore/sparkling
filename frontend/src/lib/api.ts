@@ -1,12 +1,44 @@
 // 统一 fetch 封装；dev 走 vite proxy，prod 同源
 const BASE = ''
 
+interface ApiErrorBody {
+  message?: string
+  detail?: string
+}
+
+export class ApiError extends Error {
+  status?: number
+
+  constructor(message: string, status?: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+const parseErrorMessage = async (res: Response): Promise<string> => {
+  const text = await res.text()
+  if (!text) return `${res.status} ${res.statusText}`
+  try {
+    const body = JSON.parse(text) as ApiErrorBody
+    return body.message || body.detail || text
+  } catch {
+    return text
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(BASE + path, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
-  })
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
+  let res: Response
+  try {
+    res = await fetch(BASE + path, {
+      ...init,
+      headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new ApiError(`无法连接后端服务：${message}`)
+  }
+  if (!res.ok) throw new ApiError(await parseErrorMessage(res), res.status)
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
 }
 

@@ -1,7 +1,5 @@
 from logging.config import fileConfig
 
-from sqlalchemy import pool
-
 from alembic import context
 
 # 接入应用的 engine / metadata
