@@ -16,6 +16,9 @@ frontend/dist/
 frontend/.next/
 *.tsbuildinfo
 
+# 前端构建产物（部署时挂在 backend 内）
+backend/app/frontend/
+
 # Environment
 .env
 .env.local
