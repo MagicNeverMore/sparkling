@@ -6,13 +6,14 @@ import time
 from openai import AsyncOpenAI
 
 from ..models import Settings
+from .openai_compat import normalize_base_url
 
 
 def _get_chat_client(settings: Settings) -> AsyncOpenAI:
     """根据 Settings 构造 Chat 专用的 OpenAI 兼容客户端。"""
     return AsyncOpenAI(
         api_key=settings.chat_api_key or "not-set",
-        base_url=settings.chat_base_url or None,
+        base_url=normalize_base_url(settings.chat_base_url),
     )
 
 

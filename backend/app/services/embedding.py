@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..logger import get_logger
 from ..models import AtomEmbedding, Settings, ThoughtAtom
+from .openai_compat import normalize_base_url
 from ..vector_store import (
     get_vector,
     knn_search,
@@ -40,7 +41,7 @@ def _get_client(settings: Settings) -> AsyncOpenAI:
     """根据 Settings 构造 OpenAI 兼容客户端，支持多家 provider。"""
     return AsyncOpenAI(
         api_key=settings.embed_api_key or "not-set",
-        base_url=settings.embed_base_url or None,
+        base_url=normalize_base_url(settings.embed_base_url),
     )
 
 
