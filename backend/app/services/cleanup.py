@@ -1,15 +1,15 @@
 """后台清理任务。"""
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from ..logger import get_logger
 from ..models import ThoughtAtom
 from ..vector_store import delete_vectors, vec_table_exists
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 SOFT_DELETE_RETENTION_DAYS = 30
 

@@ -1,17 +1,17 @@
 """关联发现服务：基于 KNN 相似度发现并持久化 thought_link。"""
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from ..logger import get_logger
 from ..models import Settings, ThoughtLink
 from .embedding import knn_by_existing_embedding
 from .ws_manager import ConnectionManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def discover_links(

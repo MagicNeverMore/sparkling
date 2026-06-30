@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import json
-import logging
 
 from fastapi import WebSocket
 
-logger = logging.getLogger(__name__)
+from ..logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class ConnectionManager:

@@ -7,7 +7,6 @@ embed_dim 一旦写入 Settings 就锁定，切换 provider 需走 rebuild-embed
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from typing import TYPE_CHECKING
 
@@ -15,6 +14,7 @@ from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..logger import get_logger
 from ..models import AtomEmbedding, Settings, ThoughtAtom
 from ..vector_store import (
     get_vector,
@@ -26,7 +26,7 @@ from ..vector_store import (
 if TYPE_CHECKING:
     pass
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 防止 rebuild 和 embed_atom 同时操作 vec_atoms
 _vec_table_lock = asyncio.Lock()
@@ -48,7 +48,7 @@ async def embed_texts(settings: Settings, texts: list[str]) -> list[list[float]]
     """调用 embedding API，返回 float 向量列表。"""
     client = _get_client(settings)
     response = await client.embeddings.create(
-        model=settings.embed_model,
+        model=cast(str, settings.embed_model),
         input=texts,
     )
     return [item.embedding for item in response.data]

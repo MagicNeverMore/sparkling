@@ -6,14 +6,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from ..logger import get_logger
 from ..models import TaskQueue
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 模块级唤醒事件，enqueue 后 set()，worker loop 监听
 _wakeup: asyncio.Event | None = None

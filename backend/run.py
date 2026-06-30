@@ -4,9 +4,11 @@ from __future__ import annotations
 import uvicorn
 
 from app.config import config
+from app.logger import setup_logging
 
 
 def main() -> None:
+    setup_logging()
     uvicorn.run(
         "app.main:app",
         host=config.host,

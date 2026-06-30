@@ -8,6 +8,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from ..db import DatabaseConnectionError, get_session, switch_database
+from ..logger import get_logger
 from ..models import AtomEmbedding, Settings, ThoughtAtom
 from ..runtime import start_background_worker, stop_background_worker
 from ..services import task_queue as tq
@@ -16,6 +17,7 @@ from ..services.embedding import test_provider
 from ..services.chat import test_chat_provider
 from ..vector_store import create_vec_table, ensure_vec_table
 
+logger = get_logger(__name__)
 router = APIRouter()
 
 
@@ -210,6 +212,7 @@ async def update_settings(
 
     session.commit()
     session.refresh(s)
+    logger.info("settings 已更新")
     return _to_out(s, session)
 
 
@@ -223,6 +226,10 @@ async def test_provider_endpoint(
         raise HTTPException(status_code=400, detail="请先配置 embed_model")
 
     ok, latency_ms, error = await test_provider(s)
+    if ok:
+        logger.info("embedding provider 测试成功 latency=%.1fms", latency_ms)
+    else:
+        logger.warning("embedding provider 测试失败: %s", error)
     return TestProviderResult(ok=ok, latency_ms=latency_ms, error=error)
 
 
@@ -236,6 +243,10 @@ async def test_chat_provider_endpoint(
         raise HTTPException(status_code=400, detail="请先配置 chat_model")
 
     ok, latency_ms, error = await test_chat_provider(s)
+    if ok:
+        logger.info("chat provider 测试成功 latency=%.1fms", latency_ms)
+    else:
+        logger.warning("chat provider 测试失败: %s", error)
     return TestProviderResult(ok=ok, latency_ms=latency_ms, error=error)
 
 
@@ -282,4 +293,5 @@ async def rebuild_embeddings(
     for atom in atoms:
         tq.enqueue(session, "embed", {"atom_id": atom.id})
 
+    logger.info("embedding 重建已入队 %d 条，dim=%s", len(atoms), new_dim)
     return {"queued": len(atoms), "embed_dim": new_dim}

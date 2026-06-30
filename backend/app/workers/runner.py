@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
 from ..db import SessionLocal
+from ..logger import get_logger
 from ..models import Settings
 from ..services.cleanup import purge_expired_deleted_atoms
 from ..services import task_queue as tq
@@ -15,7 +15,7 @@ from ..services.embedding import embed_atom
 from ..services.linker import discover_links
 from ..services.ws_manager import manager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 MAX_ATTEMPTS = 3
 # 无新任务时的兜底轮询间隔（秒），防止 wakeup event 丢失

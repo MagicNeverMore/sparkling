@@ -1,14 +1,14 @@
 """向量存储抽象层：统一 sqlite-vec 和 pgvector 两种后端。"""
 from __future__ import annotations
 
-import logging
 import struct
 
 import sqlite_vec
 
 from .db import get_database_backend, get_raw_conn
+from .logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def vec_table_exists() -> bool:

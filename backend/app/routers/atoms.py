@@ -10,10 +10,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..db import get_session
+from ..logger import get_logger
 from ..models import ThoughtAtom
 from ..services import task_queue as tq
 from ..services.ws_manager import manager
 
+logger = get_logger(__name__)
 router = APIRouter()
 
 
@@ -85,6 +87,7 @@ async def create_atom(
     tq.enqueue(session, "embed", {"atom_id": atom.id})
 
     out = _to_out(atom)
+    logger.info("atom 已创建 id=%s", atom.id)
     await manager.broadcast("atom.created", out.model_dump())
     return out
 
@@ -120,6 +123,7 @@ async def update_atom(
     if content_changed:
         # 内容变更，重新触发 embedding
         tq.enqueue(session, "embed", {"atom_id": atom.id})
+        logger.info("atom 内容更新 id=%s version=%s", atom.id, atom.version)
 
     out = _to_out(atom)
     await manager.broadcast("atom.updated", out.model_dump())
@@ -140,4 +144,5 @@ async def delete_atom(
     atom.deleted_at = datetime.utcnow()
     atom.updated_at = datetime.utcnow()
     session.commit()
+    logger.info("atom 已软删除 id=%s", atom.id)
     await manager.broadcast("atom.deleted", {"id": atom.id})

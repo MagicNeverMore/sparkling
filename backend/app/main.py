@@ -11,22 +11,30 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from .config import config
 from .db import DatabaseConnectionError, configure_current_database
+from .logger import get_logger, setup_logging
 from .routers import atoms, graph, links, search, settings, tasks, ws
 from .runtime import start_background_worker, stop_background_worker
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    setup_logging()
+    logger.info("━━━ Sparkling 启动 ━━━")
     try:
         configure_current_database()
+        logger.info("数据库连接成功 (backend=%s)", config.effective_db_backend)
         await start_background_worker()
-    except (SQLAlchemyError, Exception):
-        # 数据库不可达时仍保持 HTTP 服务启动，API handler 会返回可展示的 JSON message。
-        pass
+        logger.info("后台 worker 已启动")
+    except (SQLAlchemyError, Exception) as exc:
+        logger.warning("数据库不可达，HTTP 服务仍将启动：%s", exc)
     try:
         yield
     finally:
+        logger.info("━━━ Sparkling 关闭 ━━━")
         await stop_background_worker()
+        logger.info("后台 worker 已停止")
 
 
 app = FastAPI(title="Sparkling", lifespan=lifespan)
