@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import ConfirmDialog from '../components/ConfirmDialog'
 import { useToast } from '../components/useToast'
 import { api, ApiError } from '../lib/api'
 import { useSparklingStore } from '../lib/store'
@@ -48,7 +47,6 @@ interface EmbeddingStatusRaw {
 
 export default function Settings() {
   const { show } = useToast()
-  const atomCount = useSparklingStore((state) => state.atoms.length)
   const [embedBaseUrl, setEmbedBaseUrl] = useState('https://api.openai.com/v1')
   const [embedApiKey, setEmbedApiKey] = useState('')
   const [embedApiKeyDirty, setEmbedApiKeyDirty] = useState(false)
@@ -69,8 +67,9 @@ export default function Settings() {
   const [dbPath, setDbPath] = useState('./sparkling.db')
   const [postgresqlUrl, setPostgresqlUrl] = useState('')
   const [dbSaving, setDbSaving] = useState(false)
-  const [confirmOpen, setConfirmOpen] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
+  const [dimEditing, setDimEditing] = useState(false)
+  const [savedEmbedDim, setSavedEmbedDim] = useState(1536)
   const [retryingEmbeddings, setRetryingEmbeddings] = useState(false)
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatusRaw | null>(null)
   const loadInitial = useSparklingStore((state) => state.loadInitial)
@@ -112,7 +111,7 @@ export default function Settings() {
         setEmbeddingStatus(status)
         if (rebuilding && status.pending === 0 && status.running === 0) {
           setRebuilding(false)
-          setConfirmOpen(false)
+          loadAiSettings()
           show(status.failed > 0 ? 'Embedding 重建完成，但有失败任务' : 'Embedding 重建完成', status.failed > 0 ? 'warning' : 'success')
         }
       })
@@ -436,15 +435,46 @@ export default function Settings() {
                   Embedding 向量的维度。不同模型支持的 Embed Dim 不同，请按实际情况选择。维度越高，语义表示越精细，但计算与存储开销也越大。
                 </span>
               </span>
-              <select value={embedDim} onChange={(event) => setEmbedDim(Number(event.target.value))} disabled={embedDimLocked} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 h-10 disabled:cursor-not-allowed disabled:bg-slate-900 disabled:text-slate-500">
+              <select value={embedDim} onChange={(event) => setEmbedDim(Number(event.target.value))} disabled={embedDimLocked && !dimEditing} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 h-10 disabled:cursor-not-allowed disabled:bg-slate-900 disabled:text-slate-500">
                 {dims.map((dim) => (
                   <option key={dim} value={dim}>
                     {dim}
                   </option>
                 ))}
               </select>
-              {embedDimLocked && (
-                <p className="mt-1 text-xs text-amber-400/80">维度已锁定（已有 embedding 数据）。如需更改请使用「重建 embedding」。</p>
+              {embedDimLocked && !dimEditing && (
+                <button
+                  type="button"
+                  onClick={() => { setDimEditing(true); setSavedEmbedDim(embedDim) }}
+                  className="mt-2 rounded-md border border-amber-500/50 px-3 py-1.5 text-xs text-amber-400 transition hover:bg-amber-500/10 hover:text-amber-300"
+                >
+                  更改维度（重建 embedding）
+                </button>
+              )}
+              {dimEditing && (
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (embedDim !== savedEmbedDim) {
+                        void startRebuild()
+                        setDimEditing(false)
+                      } else {
+                        show('维度未变更，无需重建', 'info')
+                      }
+                    }}
+                    className="rounded-md bg-rose-500 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-rose-400"
+                  >
+                    确认重建
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setEmbedDim(savedEmbedDim); setDimEditing(false) }}
+                    className="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+                  >
+                    取消
+                  </button>
+                </div>
               )}
             </label>
           </div>
@@ -583,31 +613,6 @@ export default function Settings() {
           </button>
         </div>
       </section>
-
-      <section className="rounded-xl border border-rose-500/60 bg-slate-900 p-5">
-        <h2 className="text-lg font-semibold text-rose-400">危险操作</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-400">切换 embedding provider 或维度后，需要重新生成所有想法的向量。</p>
-        {embeddingStatus && (
-          <div className="mt-4">
-            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-              <div className="h-full bg-rose-500 transition-all" style={{ width: `${embeddingProgress}%` }} />
-            </div>
-            <div className="mt-2 text-right font-mono text-xs text-slate-500">{embeddingProgress}%</div>
-          </div>
-        )}
-        <button
-          type="button"
-          onClick={() => setConfirmOpen(true)}
-          disabled={rebuilding}
-          className="mt-4 rounded-md bg-rose-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
-        >
-          重建 embedding
-        </button>
-      </section>
-
-      <ConfirmDialog open={confirmOpen} title="重建 embedding" confirmLabel="开始重建" confirming={rebuilding} onCancel={() => setConfirmOpen(false)} onConfirm={startRebuild}>
-        <p>将重新生成全部 {atomCount} 条想法的向量，并基于当前阈值重新发现关联。进度会按后台任务真实状态更新。</p>
-      </ConfirmDialog>
     </div>
   )
 }
