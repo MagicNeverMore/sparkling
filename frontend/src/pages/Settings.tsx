@@ -3,7 +3,7 @@ import { useToast } from '../components/useToast'
 import { api, ApiError } from '../lib/api'
 import { useSparklingStore } from '../lib/store'
 
-const dims = [384, 768, 1024, 1536, 2048, 2560, 3072]
+const dims = [384, 512, 768, 1024, 1536, 2048, 2560, 3072, 4096]
 
 type DatabaseBackend = 'sqlite' | 'postgresql'
 
@@ -432,16 +432,24 @@ export default function Settings() {
                   />
                 </svg>
                 <span className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden w-64 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs leading-relaxed text-slate-300 shadow-xl group-hover:block">
-                  Embedding 向量的维度。不同模型支持的 Embed Dim 不同，请按实际情况选择。维度越高，语义表示越精细，但计算与存储开销也越大。
+                  Embedding 向量的维度，不同模型支持的范围不同（常见 384–4096），请按模型实际输出选择。维度越高，语义表示越精细，但计算与存储开销也越大。
                 </span>
               </span>
-              <select value={embedDim} onChange={(event) => setEmbedDim(Number(event.target.value))} disabled={embedDimLocked && !dimEditing} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 h-10 disabled:cursor-not-allowed disabled:bg-slate-900 disabled:text-slate-500">
+              <input
+                type="number"
+                min={32}
+                max={4096}
+                value={embedDim}
+                onChange={(event) => setEmbedDim(Number(event.target.value))}
+                disabled={embedDimLocked && !dimEditing}
+                list="embed-dim-presets"
+                className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 h-10 disabled:cursor-not-allowed disabled:bg-slate-900 disabled:text-slate-500"
+              />
+              <datalist id="embed-dim-presets">
                 {dims.map((dim) => (
-                  <option key={dim} value={dim}>
-                    {dim}
-                  </option>
+                  <option key={dim} value={dim} />
                 ))}
-              </select>
+              </datalist>
               {embedDimLocked && !dimEditing && (
                 <button
                   type="button"
