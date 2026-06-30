@@ -13,7 +13,7 @@ const STORAGE_KEY = 'sparkling-lang'
 // ── 翻译表 ──
 const zh: Record<string, string> = {
   'nav.inbox': '收件箱',
-  'nav.graph': '网状图',
+  'nav.graph': '知识图谱',
   'nav.search': '搜索',
   'nav.tasks': '任务',
   'nav.settings': '设置',
