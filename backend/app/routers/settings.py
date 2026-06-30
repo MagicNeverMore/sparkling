@@ -55,11 +55,13 @@ class DatabaseSettingsUpdate(BaseModel):
 
 class SettingsOut(BaseModel):
     embed_base_url: Optional[str]
+    embed_api_key: Optional[str]
     embed_api_key_masked: Optional[str]   # 脱敏：仅展示后四位
     embed_model: Optional[str]
     embed_dim: Optional[int]
     embed_dim_locked: bool                # embed_dim 已锁定（有 embedding 数据）
     chat_base_url: Optional[str]
+    chat_api_key: Optional[str]
     chat_api_key_masked: Optional[str]    # 脱敏：仅展示后四位
     chat_model: Optional[str]
     link_threshold_auto: float
@@ -100,11 +102,13 @@ def _is_embed_dim_locked(session: Session) -> bool:
 def _to_out(s: Settings, session: Session) -> SettingsOut:
     return SettingsOut(
         embed_base_url=s.embed_base_url,
+        embed_api_key=s.embed_api_key,
         embed_api_key_masked=_mask_key(s.embed_api_key),
         embed_model=s.embed_model,
         embed_dim=s.embed_dim,
         embed_dim_locked=_is_embed_dim_locked(session),
         chat_base_url=s.chat_base_url,
+        chat_api_key=s.chat_api_key,
         chat_api_key_masked=_mask_key(s.chat_api_key),
         chat_model=s.chat_model,
         link_threshold_auto=s.link_threshold_auto,
@@ -114,7 +118,7 @@ def _to_out(s: Settings, session: Session) -> SettingsOut:
 
 @router.get("", response_model=SettingsOut)
 async def get_settings(session: Session = Depends(get_session)) -> SettingsOut:
-    """获取当前 settings，api_key 脱敏返回。"""
+    """获取当前 settings。单用户本地应用允许前端取回已保存的 API key。"""
     s = _get_or_create_settings(session)
     return _to_out(s, session)
 
@@ -180,9 +184,10 @@ async def update_settings(
 ) -> SettingsOut:
     """更新 settings。embed_dim 已锁定时变更需先调用 rebuild-embeddings。"""
     s = _get_or_create_settings(session)
+    fields_set = body.model_fields_set
 
     # embed_dim 锁定校验
-    if body.embed_dim is not None and body.embed_dim != s.embed_dim:
+    if "embed_dim" in fields_set and body.embed_dim is not None and body.embed_dim != s.embed_dim:
         if _is_embed_dim_locked(session):
             raise HTTPException(
                 status_code=400,
@@ -191,23 +196,23 @@ async def update_settings(
         # 首次设置 embed_dim，建表
         ensure_vec_table(body.embed_dim)
 
-    if body.embed_base_url is not None:
+    if "embed_base_url" in fields_set:
         s.embed_base_url = body.embed_base_url or None
-    if body.embed_api_key is not None:
+    if "embed_api_key" in fields_set:
         s.embed_api_key = body.embed_api_key or None
-    if body.embed_model is not None:
+    if "embed_model" in fields_set:
         s.embed_model = body.embed_model or None
-    if body.embed_dim is not None:
+    if "embed_dim" in fields_set and body.embed_dim is not None:
         s.embed_dim = body.embed_dim
-    if body.chat_base_url is not None:
+    if "chat_base_url" in fields_set:
         s.chat_base_url = body.chat_base_url or None
-    if body.chat_api_key is not None:
+    if "chat_api_key" in fields_set:
         s.chat_api_key = body.chat_api_key or None
-    if body.chat_model is not None:
+    if "chat_model" in fields_set:
         s.chat_model = body.chat_model or None
-    if body.link_threshold_auto is not None:
+    if "link_threshold_auto" in fields_set and body.link_threshold_auto is not None:
         s.link_threshold_auto = body.link_threshold_auto
-    if body.link_threshold_suggest is not None:
+    if "link_threshold_suggest" in fields_set and body.link_threshold_suggest is not None:
         s.link_threshold_suggest = body.link_threshold_suggest
 
     session.commit()

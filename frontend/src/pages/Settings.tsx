@@ -17,11 +17,13 @@ interface DatabaseSettingsRaw {
 
 interface SettingsRaw {
   embed_base_url: string | null
+  embed_api_key: string | null
   embed_api_key_masked: string | null
   embed_model: string | null
   embed_dim: number | null
   embed_dim_locked: boolean
   chat_base_url: string | null
+  chat_api_key: string | null
   chat_api_key_masked: string | null
   chat_model: string | null
   link_threshold_auto: number
@@ -39,11 +41,17 @@ export default function Settings() {
   const atomCount = useSparklingStore((state) => state.atoms.length)
   const [embedBaseUrl, setEmbedBaseUrl] = useState('https://api.openai.com/v1')
   const [embedApiKey, setEmbedApiKey] = useState('')
+  const [embedApiKeyDirty, setEmbedApiKeyDirty] = useState(false)
+  const [embedApiKeyVisible, setEmbedApiKeyVisible] = useState(false)
+  const [embedApiKeyMasked, setEmbedApiKeyMasked] = useState<string | null>(null)
   const [embedModel, setEmbedModel] = useState('text-embedding-3-small')
   const [embedDim, setEmbedDim] = useState(1536)
   const [embedDimLocked, setEmbedDimLocked] = useState(false)
   const [chatBaseUrl, setChatBaseUrl] = useState('https://api.openai.com/v1')
   const [chatApiKey, setChatApiKey] = useState('')
+  const [chatApiKeyDirty, setChatApiKeyDirty] = useState(false)
+  const [chatApiKeyVisible, setChatApiKeyVisible] = useState(false)
+  const [chatApiKeyMasked, setChatApiKeyMasked] = useState<string | null>(null)
   const [chatModel, setChatModel] = useState('gpt-4.1-mini')
   const [autoThreshold, setAutoThreshold] = useState(0.85)
   const [suggestThreshold, setSuggestThreshold] = useState(0.7)
@@ -83,10 +91,16 @@ export default function Settings() {
       .get<SettingsRaw>('/api/settings')
       .then((s) => {
         if (s.embed_base_url) setEmbedBaseUrl(s.embed_base_url)
+        setEmbedApiKey(s.embed_api_key ?? '')
+        setEmbedApiKeyDirty(false)
+        setEmbedApiKeyMasked(s.embed_api_key_masked)
         if (s.embed_model) setEmbedModel(s.embed_model)
         if (s.embed_dim) setEmbedDim(s.embed_dim)
         setEmbedDimLocked(s.embed_dim_locked)
         if (s.chat_base_url) setChatBaseUrl(s.chat_base_url)
+        setChatApiKey(s.chat_api_key ?? '')
+        setChatApiKeyDirty(false)
+        setChatApiKeyMasked(s.chat_api_key_masked)
         if (s.chat_model) setChatModel(s.chat_model)
         if (s.link_threshold_auto !== undefined) setAutoThreshold(s.link_threshold_auto)
         if (s.link_threshold_suggest !== undefined) setSuggestThreshold(s.link_threshold_suggest)
@@ -117,16 +131,27 @@ export default function Settings() {
       })
   }, [show])
 
+  const buildEmbedSettingsPayload = () => ({
+    embed_base_url: embedBaseUrl || null,
+    ...(embedApiKeyDirty ? { embed_api_key: embedApiKey } : {}),
+    embed_model: embedModel || null,
+    embed_dim: embedDim,
+  })
+
+  const buildChatSettingsPayload = () => ({
+    chat_base_url: chatBaseUrl || null,
+    ...(chatApiKeyDirty ? { chat_api_key: chatApiKey } : {}),
+    chat_model: chatModel || null,
+  })
+
   const saveEmbedSettings = async () => {
     try {
-      const s = await api.put<SettingsRaw>('/api/settings', {
-        embed_base_url: embedBaseUrl || null,
-        embed_api_key: embedApiKey || null,
-        embed_model: embedModel || null,
-        embed_dim: embedDim,
-      })
+      const s = await api.put<SettingsRaw>('/api/settings', buildEmbedSettingsPayload())
       if (s.embed_dim) setEmbedDim(s.embed_dim)
       setEmbedDimLocked(s.embed_dim_locked)
+      setEmbedApiKey(s.embed_api_key ?? '')
+      setEmbedApiKeyDirty(false)
+      setEmbedApiKeyMasked(s.embed_api_key_masked)
       show('Embedding 设置已保存', 'success')
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
@@ -136,11 +161,10 @@ export default function Settings() {
 
   const saveChatSettings = async () => {
     try {
-      await api.put<SettingsRaw>('/api/settings', {
-        chat_base_url: chatBaseUrl || null,
-        chat_api_key: chatApiKey || null,
-        chat_model: chatModel || null,
-      })
+      const s = await api.put<SettingsRaw>('/api/settings', buildChatSettingsPayload())
+      setChatApiKey(s.chat_api_key ?? '')
+      setChatApiKeyDirty(false)
+      setChatApiKeyMasked(s.chat_api_key_masked)
       show('Chat 设置已保存', 'success')
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
@@ -164,12 +188,7 @@ export default function Settings() {
   const testEmbedConnection = async () => {
     // 先保存当前 embed 配置再测试
     try {
-      await api.put<SettingsRaw>('/api/settings', {
-        embed_base_url: embedBaseUrl || null,
-        embed_api_key: embedApiKey || null,
-        embed_model: embedModel || null,
-        embed_dim: embedDim,
-      })
+      await api.put<SettingsRaw>('/api/settings', buildEmbedSettingsPayload())
     } catch {
       // 保存失败也继续测试（可能 embed_dim 锁定等）
     }
@@ -186,11 +205,7 @@ export default function Settings() {
   const testChatConnection = async () => {
     // 先保存当前 chat 配置再测试
     try {
-      await api.put<SettingsRaw>('/api/settings', {
-        chat_base_url: chatBaseUrl || null,
-        chat_api_key: chatApiKey || null,
-        chat_model: chatModel || null,
-      })
+      await api.put<SettingsRaw>('/api/settings', buildChatSettingsPayload())
     } catch {
       // 保存失败也继续测试
     }
@@ -207,12 +222,7 @@ export default function Settings() {
   const startRebuild = async () => {
     // 先保存当前配置再触发重建
     try {
-      await api.put<SettingsRaw>('/api/settings', {
-        embed_base_url: embedBaseUrl || null,
-        embed_api_key: embedApiKey || null,
-        embed_model: embedModel || null,
-        embed_dim: embedDim,
-      })
+      await api.put<SettingsRaw>('/api/settings', buildEmbedSettingsPayload())
     } catch {
       // 保存失败也继续
     }
@@ -336,7 +346,39 @@ export default function Settings() {
             </label>
             <label className="text-sm text-slate-400">
               API Key
-              <input type="password" value={embedApiKey} onChange={(event) => setEmbedApiKey(event.target.value)} placeholder="本地模型留空即可" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
+              <div className="relative mt-2">
+                <input
+                  type={embedApiKeyVisible ? 'text' : 'password'}
+                  value={embedApiKey}
+                  onChange={(event) => {
+                    setEmbedApiKey(event.target.value)
+                    setEmbedApiKeyDirty(true)
+                  }}
+                  placeholder={embedApiKeyMasked ? `已保存 ${embedApiKeyMasked}` : '本地模型留空即可'}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 pr-11 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600"
+                />
+                <button
+                  type="button"
+                  onClick={() => setEmbedApiKeyVisible((value) => !value)}
+                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
+                  aria-label={embedApiKeyVisible ? '隐藏 Embedding API Key' : '显示 Embedding API Key'}
+                  title={embedApiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
+                >
+                  {embedApiKeyVisible ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+                      <path d="M3 3l18 18" />
+                      <path d="M10.7 5.1A10.7 10.7 0 0 1 12 5c5 0 9 4.5 10 7a13.2 13.2 0 0 1-3.2 4.3" />
+                      <path d="M6.6 6.6A13 13 0 0 0 2 12c1 2.5 5 7 10 7 1.5 0 2.9-.4 4.1-1" />
+                      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+                      <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  )}
+                </button>
+              </div>
             </label>
             <label className="text-sm text-slate-400">
               Embed Model
@@ -395,7 +437,39 @@ export default function Settings() {
             </label>
             <label className="text-sm text-slate-400">
               API Key
-              <input type="password" value={chatApiKey} onChange={(event) => setChatApiKey(event.target.value)} placeholder="sk-..." className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
+              <div className="relative mt-2">
+                <input
+                  type={chatApiKeyVisible ? 'text' : 'password'}
+                  value={chatApiKey}
+                  onChange={(event) => {
+                    setChatApiKey(event.target.value)
+                    setChatApiKeyDirty(true)
+                  }}
+                  placeholder={chatApiKeyMasked ? `已保存 ${chatApiKeyMasked}` : 'sk-...'}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 pr-11 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600"
+                />
+                <button
+                  type="button"
+                  onClick={() => setChatApiKeyVisible((value) => !value)}
+                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
+                  aria-label={chatApiKeyVisible ? '隐藏 Chat API Key' : '显示 Chat API Key'}
+                  title={chatApiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
+                >
+                  {chatApiKeyVisible ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+                      <path d="M3 3l18 18" />
+                      <path d="M10.7 5.1A10.7 10.7 0 0 1 12 5c5 0 9 4.5 10 7a13.2 13.2 0 0 1-3.2 4.3" />
+                      <path d="M6.6 6.6A13 13 0 0 0 2 12c1 2.5 5 7 10 7 1.5 0 2.9-.4 4.1-1" />
+                      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+                      <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  )}
+                </button>
+              </div>
             </label>
             <label className="text-sm text-slate-400">
               Chat Model

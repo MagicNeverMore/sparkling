@@ -10,8 +10,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from .config import config
-from .db import DatabaseConnectionError, configure_current_database
+from .db import DatabaseConnectionError, configure_current_database, get_database_backend, get_engine, uses_postgresql
 from .logger import get_logger, setup_logging
+from .migrations import run_migrations_for_engine
 from .routers import atoms, graph, links, search, settings, tasks, ws
 from .runtime import start_background_worker, stop_background_worker
 
@@ -23,8 +24,9 @@ async def lifespan(_app: FastAPI):
     setup_logging()
     logger.info("━━━ Sparkling 启动 ━━━")
     try:
+        run_migrations_for_engine(get_engine(), render_as_batch=not uses_postgresql())
         configure_current_database()
-        logger.info("数据库连接成功 (backend=%s)", config.effective_db_backend)
+        logger.info("数据库连接成功 (backend=%s)", get_database_backend())
         await start_background_worker()
         logger.info("后台 worker 已启动")
     except (SQLAlchemyError, Exception) as exc:

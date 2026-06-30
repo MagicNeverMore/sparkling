@@ -119,3 +119,14 @@ SPARKLING_DEV_ORIGIN=http://localhost:5173    # 前端 dev server CORS
 AI Provider 的 `base_url` / `api_key` / 模型 / 维度由用户在前端 Settings 页面录入，**不走环境变量**，便于换号。
 
 尽量使用已有的组件库，不要重复造轮子
+
+## 数据库设计
+
+1. 本地sqlite数据库始终存在，用于基础数据（例如数据库地址设置/AI provider设置）持久化
+2. 数据库支持热切换
+
+## AI设计
+
+* embedding相关功能使用设置的embedding模型：
+* 对话和其他功能使用设置好的Chat模型：
+
