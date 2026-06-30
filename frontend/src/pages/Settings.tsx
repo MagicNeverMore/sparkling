@@ -4,7 +4,7 @@ import { useToast } from '../components/useToast'
 import { api, ApiError } from '../lib/api'
 import { useSparklingStore } from '../lib/store'
 
-const dims = [384, 768, 1024, 1536, 2048, 3072]
+const dims = [384, 768, 1024, 1536, 2048, 2560, 3072]
 
 type DatabaseBackend = 'sqlite' | 'postgresql'
 

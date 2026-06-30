@@ -14,7 +14,7 @@ from ..models import AtomEmbedding, Settings, TaskQueue, ThoughtAtom
 from ..runtime import start_background_worker, stop_background_worker
 from ..services import task_queue as tq
 from ..services.runtime_config import build_database_config, get_database_config
-from ..services.embedding import atom_content_hash, test_provider
+from ..services.embedding import atom_content_hash, embed_texts, test_provider
 from ..services.chat import test_chat_provider
 from ..vector_store import create_vec_table, ensure_vec_table
 
@@ -371,38 +371,63 @@ async def rebuild_embeddings(
     用于切换 embedding provider 或 embed_dim 变更后的全量重建。
     """
     s = _get_or_create_settings(session)
+    await stop_background_worker()
 
-    # 如果请求体包含新 embed_dim，先更新
-    new_dim = body.embed_dim if body.embed_dim is not None else s.embed_dim
-    if not new_dim:
-        raise HTTPException(status_code=400, detail="请先配置 embed_dim")
+    try:
+        # 如果请求体包含新 embed_dim，先更新
+        new_dim = body.embed_dim if body.embed_dim is not None else s.embed_dim
+        if not new_dim:
+            raise HTTPException(status_code=400, detail="请先配置 embed_dim")
 
-    # 应用其他 settings 更新
-    if body.embed_base_url is not None:
-        s.embed_base_url = body.embed_base_url or None
-    if body.embed_api_key is not None:
-        s.embed_api_key = body.embed_api_key or None
-    if body.embed_model is not None:
-        s.embed_model = body.embed_model or None
-    if body.embed_dim is not None:
-        s.embed_dim = body.embed_dim
-    session.commit()
+        # 应用其他 settings 更新
+        if body.embed_base_url is not None:
+            s.embed_base_url = body.embed_base_url or None
+        if body.embed_api_key is not None:
+            s.embed_api_key = body.embed_api_key or None
+        if body.embed_model is not None:
+            s.embed_model = body.embed_model or None
+        if body.embed_dim is not None:
+            s.embed_dim = body.embed_dim
+        session.commit()
+        session.refresh(s)
 
-    # 强制重建 vec_atoms 虚表
-    create_vec_table(new_dim)
+        # 以 provider 实际返回维度为准，避免用户选错维度后重建出不可写入的 vec_atoms。
+        try:
+            probe_vectors = await embed_texts(s, ["sparkling embedding dimension probe"])
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Embedding provider 测试失败：{exc}") from exc
+        actual_dim = len(probe_vectors[0])
+        if actual_dim <= 0:
+            raise HTTPException(status_code=400, detail="Embedding provider 返回了空向量")
+        if actual_dim != new_dim:
+            logger.info("embed_dim 已按 provider 实测结果修正：配置=%s 实际=%s", new_dim, actual_dim)
+            new_dim = actual_dim
+            s.embed_dim = actual_dim
+            session.commit()
 
-    # 清空 atom_embedding 元数据
-    session.query(AtomEmbedding).delete()
-    session.commit()
+        # 强制重建 vec_atoms 虚表
+        create_vec_table(new_dim)
 
-    # 为所有未删除的 atom 入队 embed 任务
-    atoms = (
-        session.query(ThoughtAtom)
-        .filter(ThoughtAtom.status != "deleted")
-        .all()
-    )
-    for atom in atoms:
-        tq.enqueue(session, "embed", {"atom_id": atom.id, "atom_version": atom.version})
+        # 清空 atom_embedding 元数据和旧的重建任务；worker 已暂停，可安全清理 running。
+        session.query(AtomEmbedding).delete()
+        (
+            session.query(TaskQueue)
+            .filter(TaskQueue.task_type.in_(["embed", "link_discover"]))
+            .filter(TaskQueue.status.in_(["pending", "running", "failed"]))
+            .delete(synchronize_session=False)
+        )
+        session.commit()
 
-    logger.info("embedding 重建已入队 %d 条，dim=%s", len(atoms), new_dim)
-    return {"queued": len(atoms), "embed_dim": new_dim}
+        # 为所有未删除的 atom 入队 embed 任务
+        atoms = (
+            session.query(ThoughtAtom)
+            .filter(ThoughtAtom.status != "deleted")
+            .all()
+        )
+        for atom in atoms:
+            tq.enqueue(session, "embed", {"atom_id": atom.id, "atom_version": atom.version})
+
+        logger.info("embedding 重建已入队 %d 条，dim=%s", len(atoms), new_dim)
+        return {"queued": len(atoms), "embed_dim": new_dim}
+    finally:
+        await start_background_worker()
