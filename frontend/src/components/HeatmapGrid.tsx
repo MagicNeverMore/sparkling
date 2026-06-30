@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useI18n } from '../lib/I18nProvider'
 
 interface Atom {
   createdAt: string
@@ -33,6 +34,7 @@ interface Props {
 }
 
 export default function HeatmapGrid({ atoms }: Props) {
+  const { t } = useI18n()
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth())
@@ -127,13 +129,13 @@ export default function HeatmapGrid({ atoms }: Props) {
 
       {/* Legend */}
       <div className="mt-2 flex items-center justify-end gap-1 text-[10px] text-slate-600">
-        <span>少</span>
+        <span>{t('heatmap.legend.less')}</span>
         <div className="h-2.5 w-2.5 rounded-sm bg-slate-800" />
         <div className="h-2.5 w-2.5 rounded-sm bg-violet-400/70" />
         <div className="h-2.5 w-2.5 rounded-sm bg-violet-500/80" />
         <div className="h-2.5 w-2.5 rounded-sm bg-violet-700/80" />
         <div className="h-2.5 w-2.5 rounded-sm bg-violet-900" />
-        <span>多</span>
+        <span>{t('heatmap.legend.more')}</span>
       </div>
     </div>
   )
