@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Check } from 'lucide-react'
 import { parseISO, compareAsc } from 'date-fns'
 import type { Task } from '../../lib/taskStore'
 
@@ -44,11 +45,7 @@ function TaskRow({
             : 'border-slate-600 hover:border-violet-400'
         }`}
       >
-        {task.completed && (
-          <svg viewBox="0 0 12 12" fill="none" className="h-3 w-3">
-            <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        )}
+        {task.completed && <Check size={12} strokeWidth={2.5} />}
       </button>
 
       {/* 内容 */}

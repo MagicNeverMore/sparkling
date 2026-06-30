@@ -41,6 +41,7 @@ UI 目标是：安静、专注、精确、高密度但不拥挤，适合长时�
 - 默认圆角：`rounded-md` / `rounded-lg`
 - 主要卡片最大使用 `rounded-xl`，不要使用更大的圆角
 - 避免大面积阴影；如需浮层阴影，使用克制的 `shadow-xl`
+- 使用lucide icons或者其他icons，尽量避免使用emoji除非主动提及
 
 不要引入紫蓝渐变、glassmorphism、装饰 blobs、hero 大标题、嵌套 cards、低密度 widget、无意义动画。
 
@@ -87,3 +88,4 @@ UI 目标是：安静、专注、精确、高密度但不拥挤，适合长时�
 - 使用 `pnpm` 运行前端命令。
 - UI 改动后运行 `pnpm lint` 和 `pnpm build`。
 - 如果改动影响布局或交互，尽量用截图检查 desktop 和 mobile。
+

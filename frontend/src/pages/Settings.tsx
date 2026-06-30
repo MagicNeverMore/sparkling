@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Eye, EyeOff, Info } from 'lucide-react'
 import { useToast } from '../components/useToast'
 import { api, ApiError } from '../lib/api'
 import { useSparklingStore } from '../lib/store'
@@ -400,17 +401,9 @@ export default function Settings() {
                   title={embedApiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
                 >
                   {embedApiKeyVisible ? (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
-                      <path d="M3 3l18 18" />
-                      <path d="M10.7 5.1A10.7 10.7 0 0 1 12 5c5 0 9 4.5 10 7a13.2 13.2 0 0 1-3.2 4.3" />
-                      <path d="M6.6 6.6A13 13 0 0 0 2 12c1 2.5 5 7 10 7 1.5 0 2.9-.4 4.1-1" />
-                      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
-                    </svg>
+                    <EyeOff size={16} aria-hidden="true" />
                   ) : (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
-                      <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
+                    <Eye size={16} aria-hidden="true" />
                   )}
                 </button>
               </div>
@@ -422,19 +415,7 @@ export default function Settings() {
             <label className="text-sm text-slate-400">
               <span className="group relative inline-flex items-center gap-1.5">
                 Embed Dim
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 16 16"
-                  fill="currentColor"
-                  className="h-3.5 w-3.5 cursor-help text-slate-500 transition hover:text-slate-300"
-                  aria-hidden="true"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14ZM8.93 6.588a2.065 2.065 0 0 0-1.947.319.75.75 0 1 1-.868-1.224 3.565 3.565 0 0 1 3.365-.55c.837.319 1.42 1.008 1.42 1.867 0 1.03-.669 1.764-1.318 2.26-.33.25-.697.464-.93.596v.394a.75.75 0 0 1-1.5 0V9.75c0-.613.377-1.079.865-1.442.259-.193.58-.4.819-.58C9.29 7.394 9.4 7.096 9.4 7c0-.37-.183-.58-.47-.693a2.065 2.065 0 0 0-.93-.28 2.06 2.06 0 0 0-.07-.007ZM8 12a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z"
-                    clipRule="evenodd"
-                  />
-                </svg>
+                <Info size={14} className="cursor-help text-slate-500 transition hover:text-slate-300" />
                 <span className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden w-64 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs leading-relaxed text-slate-300 shadow-xl group-hover:block">
                   Embedding 向量的维度，不同模型支持的范围不同（常见 384–4096），请按模型实际输出选择。维度越高，语义表示越精细，但计算与存储开销也越大。
                 </span>
@@ -566,17 +547,9 @@ export default function Settings() {
                   title={chatApiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
                 >
                   {chatApiKeyVisible ? (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
-                      <path d="M3 3l18 18" />
-                      <path d="M10.7 5.1A10.7 10.7 0 0 1 12 5c5 0 9 4.5 10 7a13.2 13.2 0 0 1-3.2 4.3" />
-                      <path d="M6.6 6.6A13 13 0 0 0 2 12c1 2.5 5 7 10 7 1.5 0 2.9-.4 4.1-1" />
-                      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
-                    </svg>
+                    <EyeOff size={16} aria-hidden="true" />
                   ) : (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
-                      <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
+                    <Eye size={16} aria-hidden="true" />
                   )}
                 </button>
               </div>

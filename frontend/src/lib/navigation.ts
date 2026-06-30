@@ -1,7 +1,7 @@
 export const navItems = [
-  { to: '/inbox', labelKey: 'nav.inbox', icon: '⌁' },
-  { to: '/graph', labelKey: 'nav.graph', icon: '⬡' },
-  { to: '/search', labelKey: 'nav.search', icon: '⌕' },
-  { to: '/tasks', labelKey: 'nav.tasks', icon: '☑' },
-  { to: '/settings', labelKey: 'nav.settings', icon: '⚙' },
+  { to: '/inbox', labelKey: 'nav.inbox', icon: 'Inbox' },
+  { to: '/graph', labelKey: 'nav.graph', icon: 'Network' },
+  { to: '/search', labelKey: 'nav.search', icon: 'Search' },
+  { to: '/tasks', labelKey: 'nav.tasks', icon: 'CheckSquare' },
+  { to: '/settings', labelKey: 'nav.settings', icon: 'Settings' },
 ] as const

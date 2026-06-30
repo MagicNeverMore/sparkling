@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import { Inbox, Network, Search, CheckSquare, Settings, Moon, Sun, Monitor, ChevronLeft, ChevronRight, type LucideIcon } from 'lucide-react'
 import ConnectionDot from './ConnectionDot'
 import HeatmapGrid from './HeatmapGrid'
 import { navItems } from '../lib/navigation'
@@ -13,6 +14,16 @@ interface Props {
   onToggle: () => void
 }
 
+const navIconMap: Record<string, LucideIcon> = {
+  Inbox, Network, Search, CheckSquare, Settings,
+}
+
+const themeIcons: Record<string, LucideIcon> = {
+  dark: Moon,
+  light: Sun,
+  system: Monitor,
+}
+
 const navLinkClass = (isActive: boolean, iconOnly = false) =>
   `group relative flex items-center gap-3 border-l-2 px-3 py-2 text-sm transition ${
     iconOnly ? 'justify-center' : ''
@@ -21,8 +32,6 @@ const navLinkClass = (isActive: boolean, iconOnly = false) =>
       ? 'border-violet-400 bg-slate-900 text-slate-100 dark:border-violet-400 dark:bg-slate-900 dark:text-slate-100'
       : 'border-transparent text-slate-400 hover:bg-slate-900 hover:text-slate-100 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-slate-100'
   }`
-
-const themeIcons: Record<string, string> = { dark: '🌙', light: '☀️', system: '💻' }
 
 export default function SideNav({ atoms, wsStatus, collapsed, onToggle }: Props) {
   const { lang, setLang, t } = useI18n()
@@ -33,6 +42,8 @@ export default function SideNav({ atoms, wsStatus, collapsed, onToggle }: Props)
     const idx = order.indexOf(theme)
     setTheme(order[(idx + 1) % order.length])
   }
+
+  const ThemeIcon = themeIcons[theme]
 
   return (
     <aside
@@ -55,9 +66,9 @@ export default function SideNav({ atoms, wsStatus, collapsed, onToggle }: Props)
             type="button"
             onClick={onToggle}
             title={collapsed ? '展开导航' : '收起导航'}
-            className="rounded-md p-1.5 text-base text-slate-500 transition hover:bg-slate-900 hover:text-slate-200 dark:text-slate-500 dark:hover:bg-slate-900 dark:hover:text-slate-200"
+            className="rounded-md p-1.5 text-slate-500 transition hover:bg-slate-900 hover:text-slate-200 dark:text-slate-500 dark:hover:bg-slate-900 dark:hover:text-slate-200"
           >
-            {collapsed ? '›' : '‹'}
+            {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
           </button>
         </div>
       </div>
@@ -73,13 +84,14 @@ export default function SideNav({ atoms, wsStatus, collapsed, onToggle }: Props)
       <nav className="space-y-1 p-2">
         {navItems.map((item) => {
           const translated = t(item.labelKey)
+          const Icon = navIconMap[item.icon]
           return (
             <NavLink
               key={item.to}
               to={item.to}
               className={({ isActive }) => navLinkClass(isActive, collapsed)}
             >
-              <span className="w-5 text-center text-lg">{item.icon}</span>
+              {Icon ? <Icon size={collapsed ? 20 : 18} className="shrink-0" /> : <span className="w-5 text-center text-lg">{item.icon}</span>}
               {!collapsed && <span>{translated}</span>}
               {collapsed && (
                 <span className="pointer-events-none absolute left-14 z-40 hidden whitespace-nowrap rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-xs text-slate-200 shadow-xl group-hover:block dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
@@ -107,9 +119,10 @@ export default function SideNav({ atoms, wsStatus, collapsed, onToggle }: Props)
           type="button"
           onClick={cycleTheme}
           title={`${t('theme.system')} / ${t('theme.dark')} / ${t('theme.light')}`}
-          className="rounded-md px-2 py-1.5 text-sm text-slate-400 transition hover:bg-slate-800 hover:text-slate-200 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+          className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-slate-400 transition hover:bg-slate-800 hover:text-slate-200 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
         >
-          {collapsed ? themeIcons[theme] : `${themeIcons[theme]} ${t(`theme.${theme}`)}`}
+          <ThemeIcon size={collapsed ? 18 : 14} />
+          {!collapsed && <span>{t(`theme.${theme}`)}</span>}
         </button>
         <button
           type="button"
