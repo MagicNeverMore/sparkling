@@ -5,10 +5,6 @@ interface Atom {
   createdAt: string
 }
 
-function getMonthKey(year: number, month: number) {
-  return `${year}-${String(month + 1).padStart(2, '0')}`
-}
-
 function countByDate(atoms: Atom[]) {
   const map = new Map<string, number>()
   for (const atom of atoms) {
@@ -41,7 +37,7 @@ export default function HeatmapGrid({ atoms }: Props) {
 
   const dateCounts = useMemo(() => countByDate(atoms), [atoms])
 
-  const { firstDayOfWeek, daysInMonth, prevMonthDays } = useMemo(() => {
+  const { daysInMonth, prevMonthDays } = useMemo(() => {
     const first = new Date(year, month, 1)
     const last = new Date(year, month + 1, 0)
     // 0 = Sunday

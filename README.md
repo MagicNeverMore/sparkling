@@ -1,136 +1,207 @@
 # Sparkling
 
-> 本地优先的碎片想法管理工具 — AI 自动语义关联 + 网状图可视化 + PWA 移动端
+> Local-first fragmented thought manager — AI-powered semantic linking + knowledge graph visualization + PWA mobile
 
-## 快速开始（Docker）
+[中文说明](./README-zh.md)
 
-### 前置条件
+## Features
+
+- **Quick capture** — Zero-friction input, jot down thoughts instantly
+- **AI semantic linking** — Auto-discover connections between thoughts with auto-confirm / suggest two-tier thresholds
+- **Knowledge graph** — AntV G6 interactive network graph, drag to explore thought relationships
+- **Semantic search** — Natural language search powered by vector similarity
+- **Task management** — Calendar view + todo list with due-date reminders
+- **Monthly activity heatmap** — Inbox activity at a glance
+- **Dark / Light / System** — Three theme modes
+- **Chinese / English** — UI internationalization
+- **PWA** — Installable to desktop, offline reading of cached data
+
+## Quick Start (Docker)
+
+### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) 24+
 - [Docker Compose](https://docs.docker.com/compose/install/) v2+
 
-### 1. 克隆项目
+### 1. Clone
 
 ```bash
 git clone <repo-url> sparkling
 cd sparkling
 ```
 
-### 2. 启动服务
+### 2. Start
 
 ```bash
 docker compose up -d
 ```
 
-首次启动会自动完成：构建镜像 → 安装依赖 → 创建数据库 → 跑迁移 → 启动服务。
+First start will automatically: build image → install dependencies → create database → run migrations → start services.
 
-### 3. 打开浏览器
+### 3. Open
 
 ```
 http://localhost:3721
 ```
 
-### 4. 查看日志
+### 4. View logs
 
 ```bash
 docker compose logs -f
 ```
 
-### 5. 停止服务
+### 5. Stop
 
 ```bash
 docker compose down
 ```
 
-## 数据持久化
+## Data Persistence
 
-SQLite 数据库文件存放在 **named volume** `sparkling-data` 中，映射到容器内的 `/data/sparkling.db`。
+The SQLite database file is stored in the **named volume** `sparkling-data`, mounted at `/data/sparkling.db` inside the container.
 
 ```bash
-# 查看 volume 位置（macOS 在 Docker Desktop 管理的虚拟磁盘内）
+# View volume location (macOS: inside Docker Desktop's managed virtual disk)
 docker volume inspect sparkling-data
 ```
 
-**升级 / 重建镜像不会丢失数据**——只要不手动删除 volume：
+**Upgrading or rebuilding the image will not lose data** — as long as you don't manually delete the volume:
 
 ```bash
-# 安全升级流程
-docker compose down          # 停容器（volume 保留）
+# Safe upgrade workflow
+docker compose down          # stop containers (volume preserved)
 docker compose build --no-cache
-docker compose up -d          # 启动，原有数据完好
+docker compose up -d          # start with existing data intact
 
-# 如果想彻底清空数据
-docker compose down -v        # ⚠️ 同时删除 volume，数据不可恢复
+# To wipe all data
+docker compose down -v        # ⚠️ also deletes volume, data unrecoverable
 ```
 
-### 备份与恢复
+### Backup & Restore
 
 ```bash
-# 备份
+# Backup
 docker compose exec sparkling cp /data/sparkling.db /data/sparkling.db.bak
 docker cp sparkling:/data/sparkling.db ./sparkling-backup.db
 
-# 恢复（停掉容器后）
+# Restore (after stopping the container)
 docker cp ./sparkling-backup.db sparkling:/data/sparkling.db
 docker compose restart
 ```
 
-## 环境变量
+## Environment Variables
 
-全部可选，默认值适用于本地 Docker 部署：
+All optional, defaults suitable for local Docker deployment:
 
-| 变量 | 默认值 | 说明 |
+| Variable | Default | Description |
 |---|---|---|
-| `SPARKLING_PORT` | `3721` | 服务监听端口 |
-| `SPARKLING_DB_BACKEND` | `sqlite` | 数据库后端：`sqlite` 或 `postgresql` |
-| `SPARKLING_DB_PATH` | `/data/sparkling.db` | SQLite 文件路径 |
-| `SPARKLING_POSTGRESQL_URL` | (空) | PostgreSQL 连接串，例如 `postgresql://user:pass@host:5432/sparkling` |
-| `SPARKLING_HOST` | `0.0.0.0` | 监听地址（Docker 内需要 `0.0.0.0`） |
-| `SPARKLING_DEV_ORIGIN` | (空) | 前端 dev server 的 CORS origin |
+| `SPARKLING_PORT` | `3721` | Server listen port |
+| `SPARKLING_DB_BACKEND` | `sqlite` | Database backend: `sqlite` or `postgresql` |
+| `SPARKLING_DB_PATH` | `/data/sparkling.db` | SQLite file path |
+| `SPARKLING_POSTGRESQL_URL` | (empty) | PostgreSQL connection string, e.g. `postgresql://user:pass@host:5432/sparkling` |
+| `SPARKLING_HOST` | `0.0.0.0` | Listen address (`0.0.0.0` required inside Docker) |
+| `SPARKLING_DEV_ORIGIN` | (empty) | CORS origin for frontend dev server |
 
-在 `docker-compose.yml` 中修改对应 `environment` 字段。也可以在页面 **Settings → 数据库** 中切换 SQLite/PostgreSQL；保存后需要重启后端服务才会生效。
+Modify the corresponding `environment` fields in `docker-compose.yml`. You can also switch between SQLite/PostgreSQL on the **Settings → Database** page; a backend restart is required after saving.
 
-## AI Provider 配置
+## AI Provider Configuration
 
-Docker 部署后，在页面的 **Settings** 中填写：
+After Docker deployment, configure Embedding and Chat providers separately on the **Settings** page:
 
-- **Base URL**：API 地址（如 `https://api.openai.com/v1`）
-- **API Key**：你的密钥
-- **模型名称**：用于 embedding 的模型（如 `text-embedding-3-small`）
+**Embedding**
+- Base URL — API endpoint (e.g. `https://api.openai.com/v1`)
+- API Key — your key (can be empty for local models)
+- Model — e.g. `text-embedding-3-small`
+- Dimension — locked once set; switching requires a rebuild
 
-这些配置存储在 SQLite 的 `settings` 表中，随 volume 持久化。
+**Chat (reserved)**
+- Independent Base URL / API Key / Model
+- Built-in connectivity test button
+
+These settings are stored in the `settings` table in SQLite and persist with the volume.
 
 ---
 
-## 开发环境
+## Development
 
 ```bash
-# 后端（http://127.0.0.1:3721）
+# Backend (http://127.0.0.1:8000)
 cd backend
-cp .env.template .env    # 首次克隆后
+cp .env.template .env    # after first clone, edit as needed
 uv run python run.py
 
-# 前端（http://localhost:5173，API/WS 代理到 3721）
+# Frontend (http://localhost:5173, API/WS proxied to 8000)
 cd frontend
 pnpm dev
 
-# 数据库迁移
+# Database migrations
 cd backend
-uv run alembic revision --autogenerate -m "<描述>"
+uv run alembic revision --autogenerate -m "<description>"
 uv run alembic upgrade head
 ```
 
-详细说明见 [AGENTS.md](./AGENTS.md)。
+See [AGENTS.md](./AGENTS.md) for detailed development guide.
 
-## 技术栈
+## Project Structure
 
-| 层 | 技术 |
+```
+sparkling/
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # FastAPI entry point + static frontend serving
+│   │   ├── config.py            # Environment variable configuration
+│   │   ├── db.py                # DB connection management (SQLite / PostgreSQL)
+│   │   ├── models.py            # ORM models
+│   │   ├── vector_store.py       # sqlite-vec vector store
+│   │   ├── migrations.py         # Auto-migration runner
+│   │   ├── runtime.py            # Background worker lifecycle
+│   │   ├── logger.py             # Unified logging (console + daily rotated files)
+│   │   ├── routers/              # API routes
+│   │   │   ├── atoms.py         # Thought CRUD + WebSocket broadcast
+│   │   │   ├── links.py         # Link queries
+│   │   │   ├── search.py        # Semantic search
+│   │   │   ├── graph.py         # Graph data
+│   │   │   ├── tasks.py         # Task management
+│   │   │   ├── settings.py      # AI / DB configuration
+│   │   │   └── ws.py            # WebSocket real-time events
+│   │   ├── services/             # Business logic
+│   │   │   ├── embedding.py     # Embedding calls + dimension locking
+│   │   │   ├── linker.py        # Link discovery (KNN + threshold routing)
+│   │   │   ├── chat.py          # Chat provider
+│   │   │   ├── task_queue.py    # Async task queue (SQLite)
+│   │   │   ├── ws_manager.py    # WebSocket connection manager
+│   │   │   ├── cleanup.py       # Soft-delete cleanup
+│   │   │   └── runtime_config.py # Runtime DB configuration
+│   │   └── workers/              # Background task workers
+│   └── logs/                     # Log files (sparkling.log + error.log)
+├── frontend/
+│   └── src/
+│       ├── pages/                # Pages
+│       │   ├── Inbox.tsx         # Inbox (quick input + card stream + heatmap)
+│       │   ├── Graph.tsx         # Knowledge graph
+│       │   ├── Search.tsx        # Semantic search
+│       │   ├── Tasks.tsx         # Task management (calendar + list)
+│       │   ├── Settings.tsx      # Settings (AI / DB / appearance)
+│       │   └── AtomDetail.tsx    # Thought detail + AI link suggestions
+│       ├── components/           # Shared components
+│       ├── lib/                  # API / Store / i18n / Theme
+│       └── layouts/              # Layout (AppShell + SideNav)
+├── docker-compose.yml
+├── Dockerfile
+└── PLAN.md                       # Full implementation plan
+```
+
+## Tech Stack
+
+| Layer | Technology |
 |---|---|
-| 后端 | Python 3.12 / FastAPI / SQLAlchemy / sqlite-vec |
-| 前端 | React 19 / Vite / Tailwind / React Flow |
-| AI | OpenAI SDK（兼容多家 provider） |
-| 数据库 | SQLite + sqlite-vec（向量检索） |
-| 部署 | Docker / Docker Compose |
+| Backend | Python 3.12 / FastAPI / SQLAlchemy / sqlite-vec |
+| Frontend | React 19 / Vite / Tailwind / AntV G6 |
+| Icons | lucide-react |
+| AI | OpenAI SDK (multi-provider compatible, Embedding + Chat independent config) |
+| Database | SQLite + sqlite-vec (vector search), optional PostgreSQL + pgvector |
+| Async tasks | asyncio + SQLite task queue (no Redis dependency) |
+| Deployment | Docker / Docker Compose |
 
 ## License
 
