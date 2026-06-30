@@ -20,10 +20,10 @@ function countByDate(atoms: Atom[]) {
 
 function getCellColor(count: number): string {
   if (count === 0) return 'bg-slate-800'
-  if (count <= 2) return 'bg-violet-900/70'
-  if (count <= 4) return 'bg-violet-700/80'
-  if (count <= 7) return 'bg-violet-500/90'
-  return 'bg-violet-300'
+  if (count <= 2) return 'bg-violet-400/70'
+  if (count <= 4) return 'bg-violet-500/80'
+  if (count <= 7) return 'bg-violet-700/80'
+  return 'bg-violet-900'
 }
 
 const DAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
@@ -129,10 +129,10 @@ export default function HeatmapGrid({ atoms }: Props) {
       <div className="mt-2 flex items-center justify-end gap-1 text-[10px] text-slate-600">
         <span>少</span>
         <div className="h-2.5 w-2.5 rounded-sm bg-slate-800" />
-        <div className="h-2.5 w-2.5 rounded-sm bg-violet-900/70" />
+        <div className="h-2.5 w-2.5 rounded-sm bg-violet-400/70" />
+        <div className="h-2.5 w-2.5 rounded-sm bg-violet-500/80" />
         <div className="h-2.5 w-2.5 rounded-sm bg-violet-700/80" />
-        <div className="h-2.5 w-2.5 rounded-sm bg-violet-500/90" />
-        <div className="h-2.5 w-2.5 rounded-sm bg-violet-300" />
+        <div className="h-2.5 w-2.5 rounded-sm bg-violet-900" />
         <span>多</span>
       </div>
     </div>
