@@ -1,5 +1,6 @@
-import { NavLink, Link } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import ConnectionDot from './ConnectionDot'
+import HeatmapGrid from './HeatmapGrid'
 import { navItems } from '../lib/navigation'
 import type { AtomMock } from '../lib/mock'
 
@@ -20,7 +21,6 @@ const navClass = (isActive: boolean, iconOnly = false) =>
   }`
 
 export default function SideNav({ atoms, wsStatus, collapsed, onToggle }: Props) {
-  const recent = atoms.slice(0, 5)
 
   return (
     <aside
@@ -77,21 +77,11 @@ export default function SideNav({ atoms, wsStatus, collapsed, onToggle }: Props)
         ))}
       </nav>
 
-      {/* 最近访问 — 仅展开时显示 */}
+      {/* 月度热力图 — 仅展开时显示 */}
       {!collapsed && (
-        <div className="mt-2 border-t border-slate-800 px-4 py-4">
-          <div className="mb-3 text-xs uppercase tracking-wide text-slate-500">最近</div>
-          <div className="space-y-2">
-            {recent.map((atom) => (
-              <Link
-                key={atom.id}
-                to={`/atoms/${atom.id}`}
-                className="block truncate rounded-md px-2 py-2 text-sm text-slate-400 transition hover:bg-slate-900 hover:text-slate-100"
-              >
-                {atom.content}
-              </Link>
-            ))}
-          </div>
+        <div className="mt-2 border-t border-slate-800">
+          <div className="mb-1 px-4 pt-3 text-xs uppercase tracking-wide text-slate-500">活跃</div>
+          <HeatmapGrid atoms={atoms} />
         </div>
       )}
     </aside>
