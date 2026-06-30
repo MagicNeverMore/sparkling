@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..db import get_session
-from ..models import ThoughtLink
+from ..models import Settings, ThoughtAtom, ThoughtLink
 from ..services.ws_manager import manager
 
 router = APIRouter()
@@ -44,14 +44,29 @@ def _to_out(link: ThoughtLink) -> LinkOut:
 
 @router.get("", response_model=list[LinkOut])
 async def list_links(session: Session = Depends(get_session)) -> list[LinkOut]:
-    """列出所有未忽略的关联（含已确认和待确认）。"""
+    """列出所有未忽略且两端 atom 均有效的关联（含已确认和待确认）。"""
+    settings = session.get(Settings, 1)
+    suggest_threshold = settings.link_threshold_suggest if settings else 0.70
+    valid_atom_ids = {
+        atom_id
+        for (atom_id,) in (
+            session.query(ThoughtAtom.id)
+            .filter(ThoughtAtom.status != "deleted")
+            .all()
+        )
+    }
     links = (
         session.query(ThoughtLink)
         .filter(ThoughtLink.user_ignored.is_(False))
         .order_by(ThoughtLink.created_at.desc())
         .all()
     )
-    return [_to_out(lk) for lk in links]
+    return [
+        _to_out(lk)
+        for lk in links
+        if lk.from_atom_id in valid_atom_ids and lk.to_atom_id in valid_atom_ids
+        and (lk.source == "user" or (lk.confidence is not None and lk.confidence >= suggest_threshold))
+    ]
 
 
 @router.post("/{link_id}/confirm", response_model=LinkOut)
@@ -66,6 +81,7 @@ async def confirm_link(
 
     link.user_confirmed = True
     link.user_ignored = False
+    link.source = "user"
     session.commit()
 
     out = _to_out(link)
@@ -78,7 +94,7 @@ async def ignore_link(
     link_id: str,
     session: Session = Depends(get_session),
 ) -> LinkOut:
-    """忽略 AI 建议的关联。"""
+    """忽略或取消关联。"""
     link = session.get(ThoughtLink, link_id)
     if link is None:
         raise HTTPException(status_code=404, detail="link 不存在")
@@ -86,5 +102,6 @@ async def ignore_link(
     link.user_ignored = True
     link.user_confirmed = False
     session.commit()
+    await manager.broadcast("link.ignored", {"id": link.id})
 
     return _to_out(link)

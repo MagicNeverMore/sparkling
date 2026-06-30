@@ -36,6 +36,16 @@ interface TestProviderRaw {
   error: string | null
 }
 
+interface EmbeddingStatusRaw {
+  active_atoms: number
+  embedded_atoms: number
+  stale_atoms: number
+  pending: number
+  running: number
+  failed: number
+  last_error: string | null
+}
+
 export default function Settings() {
   const { show } = useToast()
   const atomCount = useSparklingStore((state) => state.atoms.length)
@@ -61,30 +71,14 @@ export default function Settings() {
   const [dbSaving, setDbSaving] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
-  const [progress, setProgress] = useState(0)
+  const [retryingEmbeddings, setRetryingEmbeddings] = useState(false)
+  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatusRaw | null>(null)
   const loadInitial = useSparklingStore((state) => state.loadInitial)
   const thresholdsValid = autoThreshold >= suggestThreshold + 0.05
   const databaseValid = dbBackend === 'sqlite' ? dbPath.trim().length > 0 : postgresqlUrl.trim().length > 0
-
-  useEffect(() => {
-    if (!rebuilding) return
-    const timer = window.setInterval(() => {
-      setProgress((value) => {
-        const next = Math.min(100, value + 5)
-        if (next === 100) {
-          window.clearInterval(timer)
-          window.setTimeout(() => {
-            setRebuilding(false)
-            setConfirmOpen(false)
-            loadAiSettings()
-            show('Embedding 重建完成', 'success')
-          }, 250)
-        }
-        return next
-      })
-    }, 300)
-    return () => window.clearInterval(timer)
-  }, [rebuilding, show])
+  const embeddingProgress = embeddingStatus?.active_atoms
+    ? Math.round((embeddingStatus.embedded_atoms / embeddingStatus.active_atoms) * 100)
+    : 0
 
   const loadAiSettings = () => {
     void api
@@ -111,10 +105,33 @@ export default function Settings() {
       })
   }
 
+  const loadEmbeddingStatus = () => {
+    void api
+      .get<EmbeddingStatusRaw>('/api/settings/embedding-status')
+      .then((status) => {
+        setEmbeddingStatus(status)
+        if (rebuilding && status.pending === 0 && status.running === 0) {
+          setRebuilding(false)
+          setConfirmOpen(false)
+          show(status.failed > 0 ? 'Embedding 重建完成，但有失败任务' : 'Embedding 重建完成', status.failed > 0 ? 'warning' : 'success')
+        }
+      })
+      .catch(() => {
+        setEmbeddingStatus(null)
+      })
+  }
+
   useEffect(() => {
     loadAiSettings()
+    loadEmbeddingStatus()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(loadEmbeddingStatus, 4000)
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rebuilding])
 
   // 数据库配置独立加载，不受 loadAiSettings 影响
   useEffect(() => {
@@ -178,6 +195,7 @@ export default function Settings() {
         link_threshold_auto: autoThreshold,
         link_threshold_suggest: suggestThreshold,
       })
+      await loadInitial()
       show('阈值已保存', 'success')
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
@@ -230,11 +248,25 @@ export default function Settings() {
       await api.post('/api/settings/rebuild-embeddings', {
         embed_dim: embedDim,
       })
-      setProgress(0)
       setRebuilding(true)
+      loadEmbeddingStatus()
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
       show(`重建失败：${message}`, 'error')
+    }
+  }
+
+  const retryFailedEmbeddings = async () => {
+    setRetryingEmbeddings(true)
+    try {
+      const result = await api.post<{ retried: number }>('/api/settings/retry-failed-embeddings')
+      show(result.retried > 0 ? `已重试 ${result.retried} 个失败任务` : '没有失败任务需要重试', result.retried > 0 ? 'success' : 'info')
+      loadEmbeddingStatus()
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(`重试失败：${message}`, 'error')
+    } finally {
+      setRetryingEmbeddings(false)
     }
   }
 
@@ -424,6 +456,42 @@ export default function Settings() {
               保存
             </button>
           </div>
+          {embeddingStatus && (
+            <div className="mt-4 rounded-md border border-slate-800 bg-slate-950 px-3 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-slate-200">Embedding 同步</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {embeddingStatus.embedded_atoms} / {embeddingStatus.active_atoms} 已同步
+                    {embeddingStatus.stale_atoms > 0 ? `，${embeddingStatus.stale_atoms} 条待更新` : ''}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="rounded border border-slate-700 px-2 py-1 text-slate-400">pending {embeddingStatus.pending}</span>
+                  <span className="rounded border border-slate-700 px-2 py-1 text-slate-400">running {embeddingStatus.running}</span>
+                  <span className={`rounded border px-2 py-1 ${embeddingStatus.failed > 0 ? 'border-rose-500/60 text-rose-300' : 'border-slate-700 text-slate-400'}`}>failed {embeddingStatus.failed}</span>
+                </div>
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-800">
+                <div className="h-full bg-violet-400 transition-all" style={{ width: `${embeddingProgress}%` }} />
+              </div>
+              {embeddingStatus.last_error && (
+                <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs leading-5 text-rose-200">
+                  {embeddingStatus.last_error}
+                </div>
+              )}
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={retryFailedEmbeddings}
+                  disabled={retryingEmbeddings || embeddingStatus.failed === 0}
+                  className="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-600"
+                >
+                  {retryingEmbeddings ? '重试中…' : '重试失败任务'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── Chat ── */}
@@ -519,12 +587,12 @@ export default function Settings() {
       <section className="rounded-xl border border-rose-500/60 bg-slate-900 p-5">
         <h2 className="text-lg font-semibold text-rose-400">危险操作</h2>
         <p className="mt-2 text-sm leading-6 text-slate-400">切换 embedding provider 或维度后，需要重新生成所有想法的向量。</p>
-        {rebuilding && (
+        {embeddingStatus && (
           <div className="mt-4">
             <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-              <div className="h-full bg-rose-500 transition-all" style={{ width: `${progress}%` }} />
+              <div className="h-full bg-rose-500 transition-all" style={{ width: `${embeddingProgress}%` }} />
             </div>
-            <div className="mt-2 text-right font-mono text-xs text-slate-500">{progress}%</div>
+            <div className="mt-2 text-right font-mono text-xs text-slate-500">{embeddingProgress}%</div>
           </div>
         )}
         <button
@@ -538,7 +606,7 @@ export default function Settings() {
       </section>
 
       <ConfirmDialog open={confirmOpen} title="重建 embedding" confirmLabel="开始重建" confirming={rebuilding} onCancel={() => setConfirmOpen(false)} onConfirm={startRebuild}>
-        <p>将重新生成全部 {atomCount} 条想法的向量，并基于当前阈值重新发现关联。这个 mock 流程约 6 秒。</p>
+        <p>将重新生成全部 {atomCount} 条想法的向量，并基于当前阈值重新发现关联。进度会按后台任务真实状态更新。</p>
       </ConfirmDialog>
     </div>
   )

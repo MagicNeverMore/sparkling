@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -47,7 +47,11 @@ class AtomEmbedding(Base):
     atom_id: Mapped[str] = mapped_column(ForeignKey("thought_atom.id", ondelete="CASCADE"), primary_key=True)
     model_name: Mapped[str] = mapped_column(String, nullable=False)
     dim: Mapped[int] = mapped_column(Integer, nullable=False)
+    atom_version: Mapped[int | None] = mapped_column(Integer)
+    content_hash: Mapped[str | None] = mapped_column(String)
+    last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
 class ThoughtLink(Base):

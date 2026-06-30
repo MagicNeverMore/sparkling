@@ -13,6 +13,7 @@ from ..db import get_session
 from ..logger import get_logger
 from ..models import ThoughtAtom
 from ..services import task_queue as tq
+from ..services.embedding import delete_atom_embedding
 from ..services.ws_manager import manager
 
 logger = get_logger(__name__)
@@ -84,7 +85,7 @@ async def create_atom(
     session.refresh(atom)
 
     # 异步触发 embedding（不阻塞响应）
-    tq.enqueue(session, "embed", {"atom_id": atom.id})
+    tq.enqueue(session, "embed", {"atom_id": atom.id, "atom_version": atom.version})
 
     out = _to_out(atom)
     logger.info("atom 已创建 id=%s", atom.id)
@@ -122,7 +123,7 @@ async def update_atom(
 
     if content_changed:
         # 内容变更，重新触发 embedding
-        tq.enqueue(session, "embed", {"atom_id": atom.id})
+        tq.enqueue(session, "embed", {"atom_id": atom.id, "atom_version": atom.version})
         logger.info("atom 内容更新 id=%s version=%s", atom.id, atom.version)
 
     out = _to_out(atom)
@@ -144,5 +145,6 @@ async def delete_atom(
     atom.deleted_at = datetime.utcnow()
     atom.updated_at = datetime.utcnow()
     session.commit()
+    delete_atom_embedding(session, atom.id)
     logger.info("atom 已软删除 id=%s", atom.id)
     await manager.broadcast("atom.deleted", {"id": atom.id})

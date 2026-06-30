@@ -56,6 +56,7 @@ interface State {
   confirmLink: (id: string) => Promise<void>
   ignoreLink: (id: string) => Promise<void>
   pushSuggestion: (link: LinkMock) => void
+  removeLinkLocally: (id: string) => void
   removeAtomLocally: (id: string) => void
   setWsStatus: (status: State['wsStatus']) => void
 }
@@ -142,9 +143,15 @@ export const useSparklingStore = create<State>((set, get) => ({
 
   pushSuggestion: (link: LinkMock) => {
     set((state) => {
-      if (state.links.some((item) => item.id === link.id)) return state
+      if (state.links.some((item) => item.id === link.id)) {
+        return { links: state.links.map((item) => (item.id === link.id ? link : item)) }
+      }
       return { links: [link, ...state.links] }
     })
+  },
+
+  removeLinkLocally: (id: string) => {
+    set((state) => ({ links: state.links.filter((link) => link.id !== id) }))
   },
 
   removeAtomLocally: (id: string) => {

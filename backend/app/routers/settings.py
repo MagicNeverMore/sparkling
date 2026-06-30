@@ -5,15 +5,16 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..db import DatabaseConnectionError, get_session, switch_database
 from ..logger import get_logger
-from ..models import AtomEmbedding, Settings, ThoughtAtom
+from ..models import AtomEmbedding, Settings, TaskQueue, ThoughtAtom
 from ..runtime import start_background_worker, stop_background_worker
 from ..services import task_queue as tq
 from ..services.runtime_config import build_database_config, get_database_config
-from ..services.embedding import test_provider
+from ..services.embedding import atom_content_hash, test_provider
 from ..services.chat import test_chat_provider
 from ..vector_store import create_vec_table, ensure_vec_table
 
@@ -74,6 +75,20 @@ class TestProviderResult(BaseModel):
     error: Optional[str] = None
 
 
+class EmbeddingStatusOut(BaseModel):
+    active_atoms: int
+    embedded_atoms: int
+    stale_atoms: int
+    pending: int
+    running: int
+    failed: int
+    last_error: Optional[str] = None
+
+
+class RetryFailedResult(BaseModel):
+    retried: int
+
+
 def _mask_key(key: str | None) -> str | None:
     """API key 脱敏：保留后四位，其余替换为 ***。"""
     if not key:
@@ -114,6 +129,17 @@ def _to_out(s: Settings, session: Session) -> SettingsOut:
         link_threshold_auto=s.link_threshold_auto,
         link_threshold_suggest=s.link_threshold_suggest,
     )
+
+
+def _enqueue_link_discover_for_active_atoms(session: Session) -> int:
+    atoms = (
+        session.query(ThoughtAtom)
+        .filter(ThoughtAtom.status != "deleted")
+        .all()
+    )
+    for atom in atoms:
+        tq.enqueue(session, "link_discover", {"atom_id": atom.id, "atom_version": atom.version})
+    return len(atoms)
 
 
 @router.get("", response_model=SettingsOut)
@@ -217,6 +243,12 @@ async def update_settings(
 
     session.commit()
     session.refresh(s)
+    if (
+        ("link_threshold_auto" in fields_set and body.link_threshold_auto is not None)
+        or ("link_threshold_suggest" in fields_set and body.link_threshold_suggest is not None)
+    ):
+        queued = _enqueue_link_discover_for_active_atoms(session)
+        logger.info("关联阈值已更新，已入队 link_discover %d 条", queued)
     logger.info("settings 已更新")
     return _to_out(s, session)
 
@@ -253,6 +285,80 @@ async def test_chat_provider_endpoint(
     else:
         logger.warning("chat provider 测试失败: %s", error)
     return TestProviderResult(ok=ok, latency_ms=latency_ms, error=error)
+
+
+@router.get("/embedding-status", response_model=EmbeddingStatusOut)
+async def get_embedding_status(session: Session = Depends(get_session)) -> EmbeddingStatusOut:
+    """获取 embedding 同步状态，用于设置页展示真实队列进度。"""
+    active_atoms = (
+        session.query(ThoughtAtom)
+        .filter(ThoughtAtom.status != "deleted")
+        .all()
+    )
+    active_ids = {atom.id for atom in active_atoms}
+    embeddings = {
+        embedding.atom_id: embedding
+        for embedding in session.query(AtomEmbedding)
+        .filter(AtomEmbedding.atom_id.in_(active_ids))
+        .all()
+    } if active_ids else {}
+
+    embedded_atoms = 0
+    stale_atoms = 0
+    for atom in active_atoms:
+        embedding = embeddings.get(atom.id)
+        if (
+            embedding
+            and embedding.atom_version == atom.version
+            and embedding.content_hash == atom_content_hash(atom.content)
+        ):
+            embedded_atoms += 1
+        else:
+            stale_atoms += 1
+
+    task_counts = {
+        status: count
+        for status, count in (
+            session.query(TaskQueue.status, func.count(TaskQueue.id))
+            .filter(TaskQueue.task_type == "embed")
+            .group_by(TaskQueue.status)
+            .all()
+        )
+    }
+    last_failed = (
+        session.query(TaskQueue)
+        .filter(TaskQueue.task_type == "embed")
+        .filter(TaskQueue.last_error.is_not(None))
+        .order_by(TaskQueue.updated_at.desc())
+        .first()
+    )
+    last_embedding_error = (
+        session.query(AtomEmbedding)
+        .filter(AtomEmbedding.last_error.is_not(None))
+        .order_by(AtomEmbedding.updated_at.desc())
+        .first()
+    )
+    return EmbeddingStatusOut(
+        active_atoms=len(active_atoms),
+        embedded_atoms=embedded_atoms,
+        stale_atoms=stale_atoms,
+        pending=task_counts.get("pending", 0),
+        running=task_counts.get("running", 0),
+        failed=task_counts.get("failed", 0),
+        last_error=(
+            last_failed.last_error
+            if last_failed and last_failed.last_error
+            else last_embedding_error.last_error if last_embedding_error else None
+        ),
+    )
+
+
+@router.post("/retry-failed-embeddings", response_model=RetryFailedResult)
+async def retry_failed_embeddings(session: Session = Depends(get_session)) -> RetryFailedResult:
+    """重试失败的 embedding 任务。"""
+    retried = tq.retry_failed(session, "embed")
+    logger.info("已重试 failed embedding 任务 %d 条", retried)
+    return RetryFailedResult(retried=retried)
 
 
 @router.post("/rebuild-embeddings")
@@ -296,7 +402,7 @@ async def rebuild_embeddings(
         .all()
     )
     for atom in atoms:
-        tq.enqueue(session, "embed", {"atom_id": atom.id})
+        tq.enqueue(session, "embed", {"atom_id": atom.id, "atom_version": atom.version})
 
     logger.info("embedding 重建已入队 %d 条，dim=%s", len(atoms), new_dim)
     return {"queued": len(atoms), "embed_dim": new_dim}

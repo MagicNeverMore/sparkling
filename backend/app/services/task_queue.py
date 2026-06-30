@@ -94,3 +94,24 @@ def mark_failed(session: Session, task_id: str, error: str, max_attempts: int = 
         task.status = "pending"
         logger.info("任务 %s 失败，将重试（attempts=%d）: %s", task_id, task.attempts, error)
     session.commit()
+
+
+def retry_failed(session: Session, task_type: str | None = None) -> int:
+    """将 failed 任务重新置为 pending，返回重试数量。"""
+    query = session.query(TaskQueue).filter(TaskQueue.status == "failed")
+    if task_type is not None:
+        query = query.filter(TaskQueue.task_type == task_type)
+    tasks = query.all()
+    now = datetime.utcnow()
+    for task in tasks:
+        task.status = "pending"
+        task.attempts = 0
+        task.last_error = None
+        task.updated_at = now
+    session.commit()
+    if tasks:
+        try:
+            get_wakeup_event().set()
+        except RuntimeError:
+            pass
+    return len(tasks)

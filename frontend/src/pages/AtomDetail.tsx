@@ -22,6 +22,7 @@ export default function AtomDetail() {
   const atom = atoms.find((item) => item.id === id)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  const [pendingLinkId, setPendingLinkId] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -163,15 +164,33 @@ export default function AtomDetail() {
             {related.confirmed.map((item) => {
               const target = atoms.find((candidate) => candidate.id === item.atomId)
               if (!target) return null
+              const isProcessing = pendingLinkId === item.linkId
               return (
-                <Link
+                <div
                   key={item.linkId}
-                  to={`/atoms/${target.id}`}
-                  className="flex gap-2 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm leading-6 text-slate-300 transition hover:border-slate-700 hover:bg-slate-800"
+                  className="flex items-start gap-2 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm leading-6 text-slate-300 transition hover:border-slate-700 hover:bg-slate-800"
                 >
-                  <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
-                  <span className="line-clamp-2">{target.content}</span>
-                </Link>
+                  <Link to={`/atoms/${target.id}`} className="flex min-w-0 flex-1 gap-2">
+                    <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
+                    <span className="line-clamp-2">{target.content}</span>
+                  </Link>
+                  <button
+                    type="button"
+                    disabled={isProcessing}
+                    title="取消关联"
+                    onClick={async () => {
+                      setPendingLinkId(item.linkId)
+                      try {
+                        await ignoreLink(item.linkId)
+                      } finally {
+                        setPendingLinkId(null)
+                      }
+                    }}
+                    className="rounded p-1 text-slate-500 transition hover:bg-rose-400/10 hover:text-rose-400 disabled:opacity-40"
+                  >
+                    ✕
+                  </button>
+                </div>
               )
             })}
             {related.confirmed.length === 0 && <div className="text-sm text-slate-500">还没有已确认关联</div>}

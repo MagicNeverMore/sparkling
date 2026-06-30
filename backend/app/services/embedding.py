@@ -7,6 +7,7 @@ embed_dim 一旦写入 Settings 就锁定，切换 provider 需走 rebuild-embed
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from typing import TYPE_CHECKING, cast
 
@@ -18,10 +19,12 @@ from ..logger import get_logger
 from ..models import AtomEmbedding, Settings, ThoughtAtom
 from .openai_compat import normalize_base_url
 from ..vector_store import (
+    delete_vectors,
     get_vector,
     knn_search,
     serialize_vector,
     upsert_vector,
+    vec_table_exists,
 )
 
 if TYPE_CHECKING:
@@ -71,12 +74,45 @@ async def test_provider(settings: Settings) -> tuple[bool, float, str | None]:
 # 核心业务：为单条 atom 生成并持久化 embedding
 # ──────────────────────────────────────────────
 
-async def embed_atom(session: Session, atom_id: str, settings: Settings) -> None:
+async def embed_atom(session: Session, atom_id: str, settings: Settings) -> bool:
     """为指定 atom 生成 embedding 并写入 vec_atoms 和 atom_embedding 元数据表。"""
+    return await sync_atom_embedding(session, atom_id, settings)
+
+
+async def sync_atom_embedding(
+    session: Session,
+    atom_id: str,
+    settings: Settings,
+    expected_version: int | None = None,
+) -> bool:
+    """同步单条 atom 的 embedding。
+
+    返回 True 表示本次确认 vector store 已包含当前内容；返回 False 表示任务已过期或 atom 已删除。
+    """
     atom = session.get(ThoughtAtom, atom_id)
     if atom is None or atom.status == "deleted":
         logger.debug("atom %s 不存在或已删除，跳过 embed", atom_id)
-        return
+        return False
+
+    if expected_version is not None and expected_version != atom.version:
+        logger.info(
+            "atom %s embed 任务版本过期，payload=%s current=%s",
+            atom_id,
+            expected_version,
+            atom.version,
+        )
+        return False
+
+    content_hash = atom_content_hash(atom.content)
+    existing = session.get(AtomEmbedding, atom_id)
+    if (
+        existing
+        and existing.atom_version == atom.version
+        and existing.content_hash == content_hash
+        and get_vector(atom_id) is not None
+    ):
+        logger.debug("atom %s embedding 已是最新，跳过重算", atom_id)
+        return True
 
     vectors = await embed_texts(settings, [atom.content])
     vec = vectors[0]
@@ -84,19 +120,46 @@ async def embed_atom(session: Session, atom_id: str, settings: Settings) -> None
     async with _vec_table_lock:
         upsert_vector(atom_id, vec)
 
-    # 写入或更新 atom_embedding 元数据
-    existing = session.get(AtomEmbedding, atom_id)
     if existing:
         existing.model_name = settings.embed_model
         existing.dim = settings.embed_dim
+        existing.atom_version = atom.version
+        existing.content_hash = content_hash
+        existing.last_error = None
     else:
         session.add(AtomEmbedding(
             atom_id=atom_id,
             model_name=settings.embed_model,
             dim=settings.embed_dim,
+            atom_version=atom.version,
+            content_hash=content_hash,
         ))
     session.commit()
     logger.debug("atom %s embedding 已写入", atom_id)
+    return True
+
+
+def delete_atom_embedding(session: Session, atom_id: str) -> None:
+    """从 vector store 和 atom_embedding 元数据表移除指定 atom 的 embedding。"""
+    if vec_table_exists():
+        delete_vectors([atom_id])
+    existing = session.get(AtomEmbedding, atom_id)
+    if existing:
+        session.delete(existing)
+        session.commit()
+
+
+def mark_atom_embedding_error(session: Session, atom_id: str, error: str) -> None:
+    """记录指定 atom 最近一次 embedding 错误，便于设置页展示。"""
+    existing = session.get(AtomEmbedding, atom_id)
+    if not existing:
+        return
+    existing.last_error = error[:2000]
+    session.commit()
+
+
+def atom_content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 # ──────────────────────────────────────────────

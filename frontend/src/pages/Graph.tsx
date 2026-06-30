@@ -17,13 +17,13 @@ export default function Graph() {
 
   const related = useMemo(() => {
     if (!selectedId) return { confirmed: [], suggested: [] }
-    const confirmed: Array<{ linkId: string; atomId: string }> = []
+    const confirmed: Array<{ linkId: string; atomId: string; confidence: number }> = []
     const suggested: Array<{ linkId: string; atomId: string; confidence: number }> = []
     links.forEach((link) => {
       if (link.fromAtomId !== selectedId && link.toAtomId !== selectedId) return
       const otherId = link.fromAtomId === selectedId ? link.toAtomId : link.fromAtomId
       if (link.userConfirmed) {
-        confirmed.push({ linkId: link.id, atomId: otherId })
+        confirmed.push({ linkId: link.id, atomId: otherId, confidence: link.confidence })
       } else {
         suggested.push({ linkId: link.id, atomId: otherId, confidence: link.confidence })
       }
@@ -89,16 +89,38 @@ export default function Graph() {
                   {related.confirmed.map((item) => {
                     const target = atoms.find((a) => a.id === item.atomId)
                     if (!target) return null
+                    const isProcessing = pendingId === item.linkId
                     return (
-                      <button
+                      <div
                         key={item.linkId}
-                        type="button"
-                        onClick={() => setSelectedId(target.id)}
-                        className="flex w-full gap-2 rounded-lg border border-slate-800 p-2 text-left text-xs text-slate-400 transition hover:border-slate-700 hover:text-slate-200"
+                        className="flex items-start gap-1.5 rounded-lg border border-slate-800 p-2 text-xs transition hover:border-slate-700"
                       >
-                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
-                        <span className="line-clamp-2">{target.content}</span>
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(target.id)}
+                          className="flex min-w-0 flex-1 gap-2 text-left text-slate-400 transition hover:text-slate-200"
+                        >
+                          <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
+                          <span className="line-clamp-2 flex-1">{target.content}</span>
+                          <span className="shrink-0 text-emerald-400/70">{item.confidence.toFixed(2)}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isProcessing}
+                          title="取消关联"
+                          onClick={async () => {
+                            setPendingId(item.linkId)
+                            try {
+                              await ignoreLink(item.linkId)
+                            } finally {
+                              setPendingId(null)
+                            }
+                          }}
+                          className="rounded p-1 text-slate-500 transition hover:bg-rose-400/10 hover:text-rose-400 disabled:opacity-40"
+                        >
+                          ✕
+                        </button>
+                      </div>
                     )
                   })}
                 </div>
@@ -141,8 +163,11 @@ export default function Graph() {
                             title="接受关联"
                             onClick={async () => {
                               setPendingId(item.linkId)
-                              await confirmLink(item.linkId)
-                              setPendingId(null)
+                              try {
+                                await confirmLink(item.linkId)
+                              } finally {
+                                setPendingId(null)
+                              }
                             }}
                             className="rounded p-1 text-slate-500 transition hover:bg-emerald-400/10 hover:text-emerald-400 disabled:opacity-40"
                           >
@@ -154,8 +179,11 @@ export default function Graph() {
                             title="忽略关联"
                             onClick={async () => {
                               setPendingId(item.linkId)
-                              await ignoreLink(item.linkId)
-                              setPendingId(null)
+                              try {
+                                await ignoreLink(item.linkId)
+                              } finally {
+                                setPendingId(null)
+                              }
                             }}
                             className="rounded p-1 text-slate-500 transition hover:bg-rose-400/10 hover:text-rose-400 disabled:opacity-40"
                           >

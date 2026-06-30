@@ -42,9 +42,9 @@ def upsert_vector(atom_id: str, embedding: list[float]) -> None:
         with get_raw_conn() as conn:
             _pg_execute(
                 conn,
-                "INSERT INTO vec_atoms (atom_id, embedding) VALUES (%s, %s)"
+                "INSERT INTO vec_atoms (atom_id, embedding) VALUES (%s, %s::vector)"
                 " ON CONFLICT (atom_id) DO UPDATE SET embedding = EXCLUDED.embedding",
-                (atom_id, embedding),
+                (atom_id, _pg_vector_param(embedding)),
             )
             conn.commit()
         return
@@ -177,21 +177,21 @@ def _pg_knn_search(query_bytes: bytes, k: int, exclude_id: str | None) -> list[t
         if exclude_id:
             rows = _pg_execute(
                 conn,
-                "SELECT atom_id, embedding <=> %s AS distance"
+                "SELECT atom_id, embedding <=> %s::vector AS distance"
                 " FROM vec_atoms"
                 " WHERE atom_id != %s"
                 " ORDER BY distance"
                 " LIMIT %s",
-                (q_vec, exclude_id, k),
+                (_pg_vector_param(q_vec), exclude_id, k),
             )
         else:
             rows = _pg_execute(
                 conn,
-                "SELECT atom_id, embedding <=> %s AS distance"
+                "SELECT atom_id, embedding <=> %s::vector AS distance"
                 " FROM vec_atoms"
                 " ORDER BY distance"
                 " LIMIT %s",
-                (q_vec, k),
+                (_pg_vector_param(q_vec), k),
             )
         return [(r[0], float(r[1])) for r in rows]
 
@@ -213,6 +213,15 @@ def _pg_vector_to_bytes(vec) -> bytes:  # noqa: ANN001
     if isinstance(vec, bytes):
         return vec
     return _serialize_float32(list(vec))
+
+
+def _pg_vector_param(vec: list[float]) -> str:
+    """Serialize a vector parameter for pgvector distance queries.
+
+    psycopg2 adapts Python lists as numeric[], so distance expressions must pass
+    pgvector's text representation and cast it to vector in SQL.
+    """
+    return "[" + ",".join(str(float(value)) for value in vec) + "]"
 
 
 def _serialize_float32(vec: list[float]) -> bytes:

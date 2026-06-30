@@ -11,7 +11,7 @@ from ..logger import get_logger
 from ..models import Settings
 from ..services.cleanup import purge_expired_deleted_atoms
 from ..services import task_queue as tq
-from ..services.embedding import embed_atom
+from ..services.embedding import mark_atom_embedding_error, sync_atom_embedding
 from ..services.linker import discover_links
 from ..services.ws_manager import manager
 
@@ -28,9 +28,17 @@ async def _handle_embed(session, payload: dict, settings: Settings) -> None:
     atom_id = payload.get("atom_id")
     if not atom_id:
         raise ValueError("embed 任务缺少 atom_id")
-    await embed_atom(session, atom_id, settings)
+    embedded = await sync_atom_embedding(
+        session,
+        atom_id,
+        settings,
+        expected_version=payload.get("atom_version"),
+    )
+    if not embedded:
+        logger.info("embed 已跳过，atom_id=%s", atom_id)
+        return
     # embed 完成后立即触发关联发现
-    tq.enqueue(session, "link_discover", {"atom_id": atom_id})
+    tq.enqueue(session, "link_discover", {"atom_id": atom_id, "atom_version": payload.get("atom_version")})
     logger.info("embed 完成，已入队 link_discover，atom_id=%s", atom_id)
 
 
@@ -39,7 +47,13 @@ async def _handle_link_discover(session, payload: dict, settings: Settings) -> N
     atom_id = payload.get("atom_id")
     if not atom_id:
         raise ValueError("link_discover 任务缺少 atom_id")
-    links = await discover_links(session, atom_id, settings, manager)
+    links = await discover_links(
+        session,
+        atom_id,
+        settings,
+        manager,
+        expected_version=payload.get("atom_version"),
+    )
     logger.info("link_discover 完成，atom_id=%s，发现关联 %d 条", atom_id, len(links))
 
 
@@ -103,6 +117,8 @@ async def _worker_loop() -> None:
                     tq.mark_done(session, task.id)
                 except Exception as exc:
                     logger.exception("任务 %s 执行失败: %s", task.id, exc)
+                    if task.task_type == "embed" and payload.get("atom_id"):
+                        mark_atom_embedding_error(session, payload["atom_id"], str(exc))
                     tq.mark_failed(session, task.id, str(exc), MAX_ATTEMPTS)
 
 

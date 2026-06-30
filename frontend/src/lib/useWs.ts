@@ -21,6 +21,7 @@ const RECONNECT_DELAY = 3_000
 
 export const useWs = () => {
   const pushSuggestion = useSparklingStore((state) => state.pushSuggestion)
+  const removeLinkLocally = useSparklingStore((state) => state.removeLinkLocally)
   const removeAtomLocally = useSparklingStore((state) => state.removeAtomLocally)
   const setWsStatus = useSparklingStore((state) => state.setWsStatus)
   // useRef 保存 ws 实例和重连 timer，避免闭包陈旧引用
@@ -58,6 +59,9 @@ export const useWs = () => {
           } else if (msg.type === 'atom.deleted') {
             const d = msg.data as AtomDeletedEventData
             removeAtomLocally(d.id)
+          } else if (msg.type === 'link.ignored') {
+            const d = msg.data as { id: string }
+            removeLinkLocally(d.id)
           }
         } catch {
           // 忽略非 JSON 消息
@@ -84,5 +88,5 @@ export const useWs = () => {
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [pushSuggestion, removeAtomLocally, setWsStatus])
+  }, [pushSuggestion, removeLinkLocally, removeAtomLocally, setWsStatus])
 }

@@ -86,6 +86,12 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
   const [mode, setMode] = useState<'all' | 'focus'>('all')
   const [focusId, setFocusId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [graphError, setGraphError] = useState<string | null>(null)
+
+  const visibleLinks = useMemo(() => {
+    const atomIds = new Set(atoms.map((atom) => atom.id))
+    return links.filter((link) => atomIds.has(link.fromAtomId) && atomIds.has(link.toAtomId))
+  }, [atoms, links])
 
   // 同步 refs
   useEffect(() => { onNodeSelectRef.current = onNodeSelect }, [onNodeSelect])
@@ -94,12 +100,12 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
   // 计算每个节点的关联度
   const degreeMap = useMemo(() => {
     const map = new Map<string, number>()
-    links.forEach((l) => {
+    visibleLinks.forEach((l) => {
       map.set(l.fromAtomId, (map.get(l.fromAtomId) ?? 0) + 1)
       map.set(l.toAtomId, (map.get(l.toAtomId) ?? 0) + 1)
     })
     return map
-  }, [links])
+  }, [visibleLinks])
 
   useEffect(() => { degreeMapRef.current = degreeMap }, [degreeMap])
 
@@ -126,21 +132,29 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       .then(async () => {
         if (!isActiveGraph(graph, lifecycleId)) return
         await task(graph, lifecycleId)
+        setGraphError(null)
       })
-      .catch(() => undefined)
+      .catch((error) => {
+        if (!isActiveGraph(graph, lifecycleId)) return
+        const message = error instanceof Error ? error.message : String(error)
+        setGraphError(message)
+      })
   }, [isActiveGraph])
 
   // 初始化 G6 图实例（仅一次）
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+    const graphMount = document.createElement('div')
+    graphMount.className = 'h-full w-full'
+    container.appendChild(graphMount)
 
     const lifecycleId = graphLifecycleRef.current + 1
     graphLifecycleRef.current = lifecycleId
     graphTaskQueueRef.current = Promise.resolve()
 
     const graph = new Graph({
-      container,
+      container: graphMount,
       autoResize: true,
       animation: false,
       background: '#020617',
@@ -239,7 +253,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       try {
         if (!isActiveGraph(graph, lifecycleId)) return
         const nodeData = graph.getNodeData(id)
-        const rect = container.getBoundingClientRect()
+        const rect = graphMount.getBoundingClientRect()
         // G6 的 FederatedPointerEvent 透传 clientX/clientY
         const clientX = (e as unknown as PointerEvent).clientX ?? 0
         const clientY = (e as unknown as PointerEvent).clientY ?? 0
@@ -266,10 +280,12 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       clearTooltipTimer()
       graphLifecycleRef.current += 1
       if (graphRef.current === graph) graphRef.current = null
-      void graphTaskQueueRef.current
+      const pendingTasks = graphTaskQueueRef.current
+      void pendingTasks
         .catch(() => undefined)
         .finally(() => {
           if (!graph.destroyed) graph.destroy()
+          graphMount.remove()
         })
     }
   }, [isActiveGraph])
@@ -279,7 +295,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     runGraphTask(async (graph, lifecycleId) => {
       graph.setData({
         nodes: atoms.map((a) => ({ id: a.id, data: { content: a.content } })),
-        edges: links.map((l) => ({
+        edges: visibleLinks.map((l) => ({
           id: l.id,
           source: l.fromAtomId,
           target: l.toAtomId,
@@ -302,7 +318,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       const sid = selectedIdRef.current
       if (sid) await graph.setElementState(sid, ['selected'])
     })
-  }, [atoms, links, isActiveGraph, runGraphTask])
+  }, [atoms, visibleLinks, isActiveGraph, runGraphTask])
 
   // selectedId 变化时更新 G6 状态
   useEffect(() => {
@@ -324,11 +340,11 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
 
       if (mode === 'all' || !focusId) {
         graph.updateNodeData(atoms.map((a) => ({ id: a.id, style: { visibility: 'visible' as const } })))
-        graph.updateEdgeData(links.map((l) => ({ id: l.id, style: { visibility: 'visible' as const } })))
+        graph.updateEdgeData(visibleLinks.map((l) => ({ id: l.id, style: { visibility: 'visible' as const } })))
       } else {
-        const visibleNodeIds = getSecondDegreeIds(focusId, links)
+        const visibleNodeIds = getSecondDegreeIds(focusId, visibleLinks)
         const visibleEdgeIds = new Set(
-          links
+          visibleLinks
             .filter((l) => visibleNodeIds.has(l.fromAtomId) && visibleNodeIds.has(l.toAtomId))
             .map((l) => l.id),
         )
@@ -339,7 +355,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
           })),
         )
         graph.updateEdgeData(
-          links.map((l) => ({
+          visibleLinks.map((l) => ({
             id: l.id,
             style: { visibility: (visibleEdgeIds.has(l.id) ? 'visible' : 'hidden') as 'visible' | 'hidden' },
           })),
@@ -347,7 +363,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       }
       await graph.draw()
     })
-  }, [mode, focusId, atoms, links, runGraphTask])
+  }, [mode, focusId, atoms, visibleLinks, runGraphTask])
 
   // 搜索：定位到第一个匹配节点
   useEffect(() => {
@@ -365,6 +381,11 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     <div className="relative h-full min-h-[calc(100vh-3rem)] bg-slate-950 md:min-h-screen">
       {/* G6 画布挂载点 */}
       <div ref={containerRef} className="h-full w-full" />
+      {graphError && (
+        <div className="absolute left-1/2 top-1/2 z-30 max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg border border-rose-500/50 bg-slate-950 px-4 py-3 text-sm leading-6 text-rose-200 shadow-xl">
+          图谱渲染失败：{graphError}
+        </div>
+      )}
 
       {/* 左上：视图控制 */}
       <div className="pointer-events-auto absolute left-4 top-4 z-20 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/95 p-2 shadow-xl backdrop-blur">
