@@ -51,10 +51,15 @@ def _get_client(settings: Settings) -> AsyncOpenAI:
 async def embed_texts(settings: Settings, texts: list[str]) -> list[list[float]]:
     """调用 embedding API，返回 float 向量列表。"""
     client = _get_client(settings)
-    response = await client.embeddings.create(
+    kwargs: dict = dict(
         model=cast(str, settings.embed_model),
         input=texts,
     )
+    # 指定维度：OpenAI text-embedding-3-* 支持 dimensions 参数；
+    # 不支持的 provider（如 Ollama 旧版）可能忽略或报错，需用户调整
+    if settings.embed_dim:
+        kwargs["dimensions"] = settings.embed_dim
+    response = await client.embeddings.create(**kwargs)
     return [item.embedding for item in response.data]
 
 
