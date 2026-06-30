@@ -400,10 +400,10 @@ async def rebuild_embeddings(
         if actual_dim <= 0:
             raise HTTPException(status_code=400, detail="Embedding provider 返回了空向量")
         if actual_dim != new_dim:
-            logger.info("embed_dim 已按 provider 实测结果修正：配置=%s 实际=%s", new_dim, actual_dim)
-            new_dim = actual_dim
-            s.embed_dim = actual_dim
-            session.commit()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Embed Dim 不匹配：配置为 {new_dim}，但 provider 返回了 {actual_dim} 维。请重新选择正确的维度。",
+            )
 
         # 强制重建 vec_atoms 虚表
         create_vec_table(new_dim)
