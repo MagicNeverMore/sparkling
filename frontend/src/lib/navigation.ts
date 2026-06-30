@@ -1,7 +1,7 @@
 export const navItems = [
-  { to: '/inbox', label: '收件箱', icon: '⌁' },
-  { to: '/graph', label: '记忆图谱', icon: '⬡' },
-  { to: '/search', label: '搜索', icon: '⌕' },
-  { to: '/tasks', label: '任务', icon: '☑' },
-  { to: '/settings', label: '设置', icon: '⚙' },
+  { to: '/inbox', labelKey: 'nav.inbox', icon: '⌁' },
+  { to: '/graph', labelKey: 'nav.graph', icon: '⬡' },
+  { to: '/search', labelKey: 'nav.search', icon: '⌕' },
+  { to: '/tasks', labelKey: 'nav.tasks', icon: '☑' },
+  { to: '/settings', labelKey: 'nav.settings', icon: '⚙' },
 ] as const

@@ -13,14 +13,6 @@ interface Props {
   onToggle: () => void
 }
 
-const TRANSLATED_NAV_KEYS: Record<string, string> = {
-  '收件箱': 'nav.inbox',
-  '记忆图谱': 'nav.graph',
-  '搜索': 'nav.search',
-  '任务': 'nav.tasks',
-  '设置': 'nav.settings',
-}
-
 const navLinkClass = (isActive: boolean, iconOnly = false) =>
   `group relative flex items-center gap-3 border-l-2 px-3 py-2 text-sm transition ${
     iconOnly ? 'justify-center' : ''
@@ -80,8 +72,7 @@ export default function SideNav({ atoms, wsStatus, collapsed, onToggle }: Props)
       {/* 导航项 */}
       <nav className="space-y-1 p-2">
         {navItems.map((item) => {
-          const labelKey = TRANSLATED_NAV_KEYS[item.label] ?? item.label
-          const translated = t(labelKey)
+          const translated = t(item.labelKey)
           return (
             <NavLink
               key={item.to}
