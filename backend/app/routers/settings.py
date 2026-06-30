@@ -60,7 +60,8 @@ class SettingsOut(BaseModel):
     embed_api_key_masked: Optional[str]   # 脱敏：仅展示后四位
     embed_model: Optional[str]
     embed_dim: Optional[int]
-    embed_dim_locked: bool                # embed_dim 已锁定（有 embedding 数据）
+    embed_dim_locked: bool                # embed_dim / embed_model 已锁定（有 embedding 数据）
+    embed_model_locked: bool
     chat_base_url: Optional[str]
     chat_api_key: Optional[str]
     chat_api_key_masked: Optional[str]    # 脱敏：仅展示后四位
@@ -115,13 +116,15 @@ def _is_embed_dim_locked(session: Session) -> bool:
 
 
 def _to_out(s: Settings, session: Session) -> SettingsOut:
+    locked = _is_embed_dim_locked(session)
     return SettingsOut(
         embed_base_url=s.embed_base_url,
         embed_api_key=s.embed_api_key,
         embed_api_key_masked=_mask_key(s.embed_api_key),
         embed_model=s.embed_model,
         embed_dim=s.embed_dim,
-        embed_dim_locked=_is_embed_dim_locked(session),
+        embed_dim_locked=locked,
+        embed_model_locked=locked,
         chat_base_url=s.chat_base_url,
         chat_api_key=s.chat_api_key,
         chat_api_key_masked=_mask_key(s.chat_api_key),
@@ -211,10 +214,11 @@ async def update_settings(
     """更新 settings。embed_dim 已锁定时变更需先调用 rebuild-embeddings。"""
     s = _get_or_create_settings(session)
     fields_set = body.model_fields_set
+    locked = _is_embed_dim_locked(session)
 
-    # embed_dim 锁定校验
+    # embed_dim / embed_model 锁定校验
     if "embed_dim" in fields_set and body.embed_dim is not None and body.embed_dim != s.embed_dim:
-        if _is_embed_dim_locked(session):
+        if locked:
             raise HTTPException(
                 status_code=400,
                 detail="embed_dim 已锁定，切换维度请先调用 POST /api/settings/rebuild-embeddings",
@@ -222,7 +226,12 @@ async def update_settings(
         # 首次设置 embed_dim，建表
         ensure_vec_table(body.embed_dim)
 
-    if "embed_base_url" in fields_set:
+    if "embed_model" in fields_set and body.embed_model and body.embed_model != s.embed_model:
+        if locked:
+            raise HTTPException(
+                status_code=400,
+                detail="embed_model 已锁定，切换模型请先调用 POST /api/settings/rebuild-embeddings",
+            )
         s.embed_base_url = body.embed_base_url or None
     if "embed_api_key" in fields_set:
         s.embed_api_key = body.embed_api_key or None

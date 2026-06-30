@@ -21,6 +21,7 @@ interface SettingsRaw {
   embed_model: string | null
   embed_dim: number | null
   embed_dim_locked: boolean
+  embed_model_locked: boolean
   chat_base_url: string | null
   chat_api_key: string | null
   chat_api_key_masked: string | null
@@ -55,6 +56,7 @@ export default function Settings() {
   const [embedModel, setEmbedModel] = useState('text-embedding-3-small')
   const [embedDim, setEmbedDim] = useState(1536)
   const [embedDimLocked, setEmbedDimLocked] = useState(false)
+  const [embedModelLocked, setEmbedModelLocked] = useState(false)
   const [chatBaseUrl, setChatBaseUrl] = useState('https://api.openai.com/v1')
   const [chatApiKey, setChatApiKey] = useState('')
   const [chatApiKeyDirty, setChatApiKeyDirty] = useState(false)
@@ -90,6 +92,7 @@ export default function Settings() {
         if (s.embed_model) setEmbedModel(s.embed_model)
         if (s.embed_dim) setEmbedDim(s.embed_dim)
         setEmbedDimLocked(s.embed_dim_locked)
+        setEmbedModelLocked(s.embed_model_locked)
         if (s.chat_base_url) setChatBaseUrl(s.chat_base_url)
         setChatApiKey(s.chat_api_key ?? '')
         setChatApiKeyDirty(false)
@@ -165,6 +168,7 @@ export default function Settings() {
       const s = await api.put<SettingsRaw>('/api/settings', buildEmbedSettingsPayload())
       if (s.embed_dim) setEmbedDim(s.embed_dim)
       setEmbedDimLocked(s.embed_dim_locked)
+      setEmbedModelLocked(s.embed_model_locked)
       setEmbedApiKey(s.embed_api_key ?? '')
       setEmbedApiKeyDirty(false)
       setEmbedApiKeyMasked(s.embed_api_key_masked)
@@ -413,7 +417,7 @@ export default function Settings() {
             </label>
             <label className="text-sm text-slate-400">
               Embed Model
-              <input value={embedModel} onChange={(event) => setEmbedModel(event.target.value)} placeholder="text-embedding-3-small" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
+              <input value={embedModel} onChange={(event) => setEmbedModel(event.target.value)} disabled={embedModelLocked && !dimEditing} placeholder="text-embedding-3-small" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600 disabled:cursor-not-allowed disabled:bg-slate-900 disabled:text-slate-500" />
             </label>
             <label className="text-sm text-slate-400">
               <span className="group relative inline-flex items-center gap-1.5">
