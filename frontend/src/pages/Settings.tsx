@@ -15,6 +15,25 @@ interface DatabaseSettingsRaw {
   restart_required: boolean
 }
 
+interface SettingsRaw {
+  embed_base_url: string | null
+  embed_api_key_masked: string | null
+  embed_model: string | null
+  embed_dim: number | null
+  embed_dim_locked: boolean
+  chat_base_url: string | null
+  chat_api_key_masked: string | null
+  chat_model: string | null
+  link_threshold_auto: number
+  link_threshold_suggest: number
+}
+
+interface TestProviderRaw {
+  ok: boolean
+  latency_ms: number
+  error: string | null
+}
+
 export default function Settings() {
   const { show } = useToast()
   const atomCount = useSparklingStore((state) => state.atoms.length)
@@ -22,6 +41,7 @@ export default function Settings() {
   const [embedApiKey, setEmbedApiKey] = useState('')
   const [embedModel, setEmbedModel] = useState('text-embedding-3-small')
   const [embedDim, setEmbedDim] = useState(1536)
+  const [embedDimLocked, setEmbedDimLocked] = useState(false)
   const [chatBaseUrl, setChatBaseUrl] = useState('https://api.openai.com/v1')
   const [chatApiKey, setChatApiKey] = useState('')
   const [chatModel, setChatModel] = useState('gpt-4.1-mini')
@@ -48,6 +68,7 @@ export default function Settings() {
           window.setTimeout(() => {
             setRebuilding(false)
             setConfirmOpen(false)
+            loadAiSettings()
             show('Embedding 重建完成', 'success')
           }, 250)
         }
@@ -57,6 +78,31 @@ export default function Settings() {
     return () => window.clearInterval(timer)
   }, [rebuilding, show])
 
+  const loadAiSettings = () => {
+    void api
+      .get<SettingsRaw>('/api/settings')
+      .then((s) => {
+        if (s.embed_base_url) setEmbedBaseUrl(s.embed_base_url)
+        if (s.embed_model) setEmbedModel(s.embed_model)
+        if (s.embed_dim) setEmbedDim(s.embed_dim)
+        setEmbedDimLocked(s.embed_dim_locked)
+        if (s.chat_base_url) setChatBaseUrl(s.chat_base_url)
+        if (s.chat_model) setChatModel(s.chat_model)
+        if (s.link_threshold_auto !== undefined) setAutoThreshold(s.link_threshold_auto)
+        if (s.link_threshold_suggest !== undefined) setSuggestThreshold(s.link_threshold_suggest)
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        show(`读取 AI 设置失败：${message}`, 'error')
+      })
+  }
+
+  useEffect(() => {
+    loadAiSettings()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 数据库配置独立加载，不受 loadAiSettings 影响
   useEffect(() => {
     void api
       .get<DatabaseSettingsRaw>('/api/settings/database')
@@ -71,37 +117,115 @@ export default function Settings() {
       })
   }, [show])
 
-  const saveEmbedSettings = () => {
-    // TODO(real-api): PUT /api/settings with embed fields.
-    show('Embedding 设置已保存', 'success')
+  const saveEmbedSettings = async () => {
+    try {
+      const s = await api.put<SettingsRaw>('/api/settings', {
+        embed_base_url: embedBaseUrl || null,
+        embed_api_key: embedApiKey || null,
+        embed_model: embedModel || null,
+        embed_dim: embedDim,
+      })
+      if (s.embed_dim) setEmbedDim(s.embed_dim)
+      setEmbedDimLocked(s.embed_dim_locked)
+      show('Embedding 设置已保存', 'success')
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(message, 'error')
+    }
   }
 
-  const saveChatSettings = () => {
-    // TODO(real-api): PUT /api/settings with chat fields.
-    show('Chat 设置已保存', 'success')
+  const saveChatSettings = async () => {
+    try {
+      await api.put<SettingsRaw>('/api/settings', {
+        chat_base_url: chatBaseUrl || null,
+        chat_api_key: chatApiKey || null,
+        chat_model: chatModel || null,
+      })
+      show('Chat 设置已保存', 'success')
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(message, 'error')
+    }
   }
 
-  const saveThresholds = () => {
-    // TODO(real-api): PUT /api/settings with threshold values.
-    show('阈值已保存', 'success')
+  const saveThresholds = async () => {
+    try {
+      await api.put<SettingsRaw>('/api/settings', {
+        link_threshold_auto: autoThreshold,
+        link_threshold_suggest: suggestThreshold,
+      })
+      show('阈值已保存', 'success')
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(message, 'error')
+    }
   }
 
-  const testEmbedConnection = () => {
-    // TODO(real-api): POST /api/settings/test-provider.
-    if (Math.random() < 0.8) show('Embedding 连接测试成功', 'success')
-    else show('Embedding 连接失败，请检查 Base URL 和 API Key', 'error')
+  const testEmbedConnection = async () => {
+    // 先保存当前 embed 配置再测试
+    try {
+      await api.put<SettingsRaw>('/api/settings', {
+        embed_base_url: embedBaseUrl || null,
+        embed_api_key: embedApiKey || null,
+        embed_model: embedModel || null,
+        embed_dim: embedDim,
+      })
+    } catch {
+      // 保存失败也继续测试（可能 embed_dim 锁定等）
+    }
+    try {
+      const r = await api.post<TestProviderRaw>('/api/settings/test-provider')
+      if (r.ok) show(`Embedding 连接成功 (${r.latency_ms}ms)`, 'success')
+      else show(`Embedding 连接失败：${r.error}`, 'error')
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(`Embedding 连接失败：${message}`, 'error')
+    }
   }
 
-  const testChatConnection = () => {
-    // TODO(real-api): POST /api/settings/test-chat-provider.
-    if (Math.random() < 0.8) show('Chat 连接测试成功', 'success')
-    else show('Chat 连接失败，请检查 Base URL 和 API Key', 'error')
+  const testChatConnection = async () => {
+    // 先保存当前 chat 配置再测试
+    try {
+      await api.put<SettingsRaw>('/api/settings', {
+        chat_base_url: chatBaseUrl || null,
+        chat_api_key: chatApiKey || null,
+        chat_model: chatModel || null,
+      })
+    } catch {
+      // 保存失败也继续测试
+    }
+    try {
+      const r = await api.post<TestProviderRaw>('/api/settings/test-chat-provider')
+      if (r.ok) show(`Chat 连接成功 (${r.latency_ms}ms)`, 'success')
+      else show(`Chat 连接失败：${r.error}`, 'error')
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(`Chat 连接失败：${message}`, 'error')
+    }
   }
 
-  const startRebuild = () => {
-    // TODO(real-api): POST /api/settings/rebuild-embeddings and subscribe to progress.
-    setProgress(0)
-    setRebuilding(true)
+  const startRebuild = async () => {
+    // 先保存当前配置再触发重建
+    try {
+      await api.put<SettingsRaw>('/api/settings', {
+        embed_base_url: embedBaseUrl || null,
+        embed_api_key: embedApiKey || null,
+        embed_model: embedModel || null,
+        embed_dim: embedDim,
+      })
+    } catch {
+      // 保存失败也继续
+    }
+    try {
+      await api.post('/api/settings/rebuild-embeddings', {
+        embed_dim: embedDim,
+      })
+      setProgress(0)
+      setRebuilding(true)
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(`重建失败：${message}`, 'error')
+    }
   }
 
   const saveDatabaseSettings = async () => {
@@ -208,7 +332,7 @@ export default function Settings() {
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <label className="text-sm text-slate-400">
               Base URL
-              <input value={embedBaseUrl} onChange={(event) => setEmbedBaseUrl(event.target.value)} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400" />
+              <input value={embedBaseUrl} onChange={(event) => setEmbedBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
             </label>
             <label className="text-sm text-slate-400">
               API Key
@@ -216,7 +340,7 @@ export default function Settings() {
             </label>
             <label className="text-sm text-slate-400">
               Embed Model
-              <input value={embedModel} onChange={(event) => setEmbedModel(event.target.value)} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400" />
+              <input value={embedModel} onChange={(event) => setEmbedModel(event.target.value)} placeholder="text-embedding-3-small" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
             </label>
             <label className="text-sm text-slate-400">
               <span className="group relative inline-flex items-center gap-1.5">
@@ -238,13 +362,16 @@ export default function Settings() {
                   Embedding 向量的维度。不同模型支持的 Embed Dim 不同，请按实际情况选择。维度越高，语义表示越精细，但计算与存储开销也越大。
                 </span>
               </span>
-              <select value={embedDim} onChange={(event) => setEmbedDim(Number(event.target.value))} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 h-10">
+              <select value={embedDim} onChange={(event) => setEmbedDim(Number(event.target.value))} disabled={embedDimLocked} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 h-10 disabled:cursor-not-allowed disabled:bg-slate-900 disabled:text-slate-500">
                 {dims.map((dim) => (
                   <option key={dim} value={dim}>
                     {dim}
                   </option>
                 ))}
               </select>
+              {embedDimLocked && (
+                <p className="mt-1 text-xs text-amber-400/80">维度已锁定（已有 embedding 数据）。如需更改请使用「重建 embedding」。</p>
+              )}
             </label>
           </div>
           <div className="mt-4 flex justify-end gap-3">
@@ -264,15 +391,15 @@ export default function Settings() {
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <label className="text-sm text-slate-400">
               Base URL
-              <input value={chatBaseUrl} onChange={(event) => setChatBaseUrl(event.target.value)} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400" />
+              <input value={chatBaseUrl} onChange={(event) => setChatBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
             </label>
             <label className="text-sm text-slate-400">
               API Key
-              <input type="password" value={chatApiKey} onChange={(event) => setChatApiKey(event.target.value)} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400" />
+              <input type="password" value={chatApiKey} onChange={(event) => setChatApiKey(event.target.value)} placeholder="sk-..." className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
             </label>
             <label className="text-sm text-slate-400">
               Chat Model
-              <input value={chatModel} onChange={(event) => setChatModel(event.target.value)} className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400" />
+              <input value={chatModel} onChange={(event) => setChatModel(event.target.value)} placeholder="gpt-4.1-mini" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
             </label>
           </div>
           <div className="mt-4 flex justify-end gap-3">
