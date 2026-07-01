@@ -232,6 +232,7 @@ async def update_settings(
                 status_code=400,
                 detail="embed_model 已锁定，切换模型请先调用 POST /api/settings/rebuild-embeddings",
             )
+    if "embed_base_url" in fields_set:
         s.embed_base_url = body.embed_base_url or None
     if "embed_api_key" in fields_set:
         s.embed_api_key = body.embed_api_key or None

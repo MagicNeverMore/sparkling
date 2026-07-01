@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { ConflictError, type AtomMock, type LinkMock } from './mock'
 import { api, ApiError } from './api'
+import { createClientId } from './id'
 
 // 后端 API 原始响应类型（snake_case）
 interface AtomRaw {
@@ -83,7 +84,7 @@ export const useSparklingStore = create<State>((set, get) => ({
   },
 
   addAtom: async (content: string) => {
-    const tempId = `temp-${crypto.randomUUID()}`
+    const tempId = createClientId('temp')
     const createdAt = new Date().toISOString()
     const optimistic: AtomMock = { id: tempId, content, status: 'inbox', version: 1, createdAt, updatedAt: createdAt }
     set((state) => ({ atoms: [optimistic, ...state.atoms] }))

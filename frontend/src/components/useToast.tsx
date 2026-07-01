@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
 import Toast from './Toast'
+import { createClientId } from '../lib/id'
 
 export interface ToastItem {
   id: string
@@ -22,7 +23,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const show = useCallback(
     (message: string, tone: ToastItem['tone'] = 'info') => {
-      const id = crypto.randomUUID()
+      const id = createClientId('toast')
       setToasts((items) => [...items, { id, message, tone }])
       window.setTimeout(() => dismiss(id), 3_000)
     },
