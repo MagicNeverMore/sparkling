@@ -4,24 +4,26 @@ import QuickInput from '../components/QuickInput'
 import { useToast } from '../components/useToast'
 import { groupAtomsByTime } from '../lib/time'
 import { useSparklingStore } from '../lib/store'
+import { useI18n } from '../lib/I18nProvider'
 
 const skeletons = ['s1', 's2', 's3']
 
 export default function Inbox() {
+  const { lang, t } = useI18n()
   const atoms = useSparklingStore((state) => state.atoms)
   const links = useSparklingStore((state) => state.links)
   const loading = useSparklingStore((state) => state.loading)
   const addAtom = useSparklingStore((state) => state.addAtom)
   const deleteAtom = useSparklingStore((state) => state.deleteAtom)
   const { show } = useToast()
-  const groups = groupAtomsByTime(atoms)
+  const groups = groupAtomsByTime(atoms, lang)
 
   const removeAtom = async (id: string) => {
     try {
       await deleteAtom(id)
-      show('已删除', 'info')
+      show(t('common.deleted'), 'info')
     } catch {
-      show('删除失败', 'error')
+      show(t('common.deleteFailed'), 'error')
     }
   }
 
@@ -31,13 +33,13 @@ export default function Inbox() {
       <div className="mt-6 space-y-6">
         {loading &&
           skeletons.map((item) => (
-            <div key={item} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-              <div className="h-4 w-3/4 rounded bg-slate-800" />
-              <div className="mt-3 h-4 w-1/2 rounded bg-slate-800" />
-              <div className="mt-5 h-8 w-full rounded bg-slate-800" />
+            <div key={item} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
+              <div className="h-4 w-3/4 rounded bg-slate-200 dark:bg-slate-800" />
+              <div className="mt-3 h-4 w-1/2 rounded bg-slate-200 dark:bg-slate-800" />
+              <div className="mt-5 h-8 w-full rounded bg-slate-200 dark:bg-slate-800" />
             </div>
           ))}
-        {!loading && atoms.length === 0 && <EmptyState title="把今天第一个想法记下来" description="快速记录之后，Sparkling 会把相关线索连起来。" />}
+        {!loading && atoms.length === 0 && <EmptyState title={t('inbox.empty.title')} description={t('inbox.empty.desc')} />}
         {!loading &&
           Object.entries(groups).map(([label, items]) => (
             <section key={label}>

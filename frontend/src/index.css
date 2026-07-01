@@ -9,6 +9,6 @@ body,
 }
 
 body {
-  @apply bg-slate-950 text-slate-100;
+  @apply bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-slate-100;
   font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 }

@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom'
 import GraphCanvas from '../components/GraphCanvas'
 import { useSparklingStore } from '../lib/store'
 import { formatDateTime } from '../lib/time'
+import { useI18n } from '../lib/I18nProvider'
 
 export default function Graph() {
+  const { lang, t } = useI18n()
   const atoms = useSparklingStore((state) => state.atoms)
   const links = useSparklingStore((state) => state.links)
   const loading = useSparklingStore((state) => state.loading)
@@ -32,7 +34,7 @@ export default function Graph() {
   }, [selectedId, links])
 
   if (loading) {
-    return <div className="p-6 text-slate-500">加载图谱…</div>
+    return <div className="p-6 text-slate-500">{t('graph.loading')}</div>
   }
 
   return (
@@ -47,43 +49,43 @@ export default function Graph() {
 
       {/* 节点详情浮层 — 仅点击节点后出现，位于左侧工具栏下方 */}
       {selectedAtom && (
-        <div className="absolute left-4 top-16 z-30 w-72 max-h-[calc(100%-5rem)] overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/95 shadow-2xl backdrop-blur">
+        <div className="absolute left-4 top-16 z-30 max-h-[calc(100%-5rem)] w-72 overflow-y-auto rounded-xl border border-slate-200 bg-white/95 shadow-2xl backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
           <div className="p-4">
             {/* 头部 */}
             <div className="mb-3 flex items-center justify-between">
-              <span className="text-xs uppercase tracking-wide text-slate-500">节点详情</span>
+              <span className="text-xs uppercase tracking-wide text-slate-500">{t('graph.nodeDetail')}</span>
               <button
                 type="button"
                 onClick={() => setSelectedId(null)}
-                className="rounded p-0.5 text-slate-500 transition hover:bg-slate-800 hover:text-slate-300"
+                className="rounded p-0.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-800 dark:hover:text-slate-300"
               >
                 ✕
               </button>
             </div>
 
             {/* 内容 */}
-            <p className="mb-3 whitespace-pre-wrap text-sm leading-6 text-slate-100">
+            <p className="mb-3 whitespace-pre-wrap text-sm leading-6 text-slate-950 dark:text-slate-100">
               {selectedAtom.content}
             </p>
 
             {/* 元信息 */}
             <div className="mb-3 space-y-1 text-xs text-slate-500">
-              <div>{formatDateTime(selectedAtom.createdAt)}</div>
-              <div>关联数 {related.confirmed.length + related.suggested.length}</div>
+              <div>{formatDateTime(selectedAtom.createdAt, lang)}</div>
+              <div>{t('link.count', { count: related.confirmed.length + related.suggested.length })}</div>
             </div>
 
             <Link
               to={`/atoms/${selectedAtom.id}`}
               className="text-xs text-violet-300 transition hover:text-violet-100"
             >
-              打开详情 →
+              {t('graph.openDetail')}
             </Link>
 
             {/* 已确认关联 */}
             {related.confirmed.length > 0 && (
               <div className="mt-4">
                 <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">
-                  已确认关联
+                  {t('link.confirmedTitle')}
                 </div>
                 <div className="space-y-1.5">
                   {related.confirmed.map((item) => {
@@ -93,12 +95,12 @@ export default function Graph() {
                     return (
                       <div
                         key={item.linkId}
-                        className="flex items-start gap-1.5 rounded-lg border border-slate-800 p-2 text-xs transition hover:border-slate-700"
+                        className="flex items-start gap-1.5 rounded-lg border border-slate-200 p-2 text-xs transition hover:border-slate-300 dark:border-slate-800 dark:hover:border-slate-700"
                       >
                         <button
                           type="button"
                           onClick={() => setSelectedId(target.id)}
-                          className="flex min-w-0 flex-1 gap-2 text-left text-slate-400 transition hover:text-slate-200"
+                          className="flex min-w-0 flex-1 gap-2 text-left text-slate-500 transition hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                         >
                           <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
                           <span className="line-clamp-2 flex-1">{target.content}</span>
@@ -107,7 +109,7 @@ export default function Graph() {
                         <button
                           type="button"
                           disabled={isProcessing}
-                          title="取消关联"
+                          title={t('link.cancel')}
                           onClick={async () => {
                             setPendingId(item.linkId)
                             try {
@@ -131,7 +133,7 @@ export default function Graph() {
             {related.suggested.length > 0 && (
               <div className="mt-4">
                 <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">
-                  AI 建议关联
+                  {t('link.aiSuggestedTitle')}
                 </div>
                 <div className="space-y-1.5">
                   {related.suggested.map((item) => {
@@ -141,13 +143,13 @@ export default function Graph() {
                     return (
                       <div
                         key={item.linkId}
-                        className="flex items-start gap-1.5 rounded-lg border border-slate-800 p-2 text-xs transition hover:border-slate-700"
+                        className="flex items-start gap-1.5 rounded-lg border border-slate-200 p-2 text-xs transition hover:border-slate-300 dark:border-slate-800 dark:hover:border-slate-700"
                       >
                         {/* 点击文本区域跳转节点 */}
                         <button
                           type="button"
                           onClick={() => setSelectedId(target.id)}
-                          className="flex min-w-0 flex-1 items-start gap-2 text-left text-slate-400 hover:text-slate-200"
+                          className="flex min-w-0 flex-1 items-start gap-2 text-left text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                         >
                           <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />
                           <span className="line-clamp-2 flex-1">{target.content}</span>
@@ -160,7 +162,7 @@ export default function Graph() {
                           <button
                             type="button"
                             disabled={isProcessing}
-                            title="接受关联"
+                            title={t('link.accept')}
                             onClick={async () => {
                               setPendingId(item.linkId)
                               try {
@@ -176,7 +178,7 @@ export default function Graph() {
                           <button
                             type="button"
                             disabled={isProcessing}
-                            title="忽略关联"
+                            title={t('link.ignore')}
                             onClick={async () => {
                               setPendingId(item.linkId)
                               try {

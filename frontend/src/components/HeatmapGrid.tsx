@@ -16,7 +16,7 @@ function countByDate(atoms: Atom[]) {
 }
 
 function getCellColor(count: number): string {
-  if (count === 0) return 'bg-slate-800'
+  if (count === 0) return 'bg-slate-200 dark:bg-slate-800'
   if (count <= 2) return 'bg-violet-400/70'
   if (count <= 4) return 'bg-violet-500/80'
   if (count <= 7) return 'bg-violet-700/80'
@@ -24,13 +24,14 @@ function getCellColor(count: number): string {
 }
 
 const DAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
+const DAY_LABELS_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 interface Props {
   atoms: Atom[]
 }
 
 export default function HeatmapGrid({ atoms }: Props) {
-  const { t } = useI18n()
+  const { lang, t } = useI18n()
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth())
@@ -86,8 +87,8 @@ export default function HeatmapGrid({ atoms }: Props) {
         >
           ‹
         </button>
-        <span className="text-xs font-medium text-slate-400">
-          {year} 年 {month + 1} 月
+        <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+          {t('heatmap.month', { year, month: month + 1 })}
         </span>
         <button
           type="button"
@@ -103,7 +104,7 @@ export default function HeatmapGrid({ atoms }: Props) {
 
       {/* Day labels */}
       <div className="mb-1 grid grid-cols-7 text-center text-[10px] text-slate-600">
-        {DAY_LABELS.map((label) => (
+        {(lang === 'zh' ? DAY_LABELS : DAY_LABELS_EN).map((label) => (
           <span key={label}>{label}</span>
         ))}
       </div>
@@ -113,11 +114,11 @@ export default function HeatmapGrid({ atoms }: Props) {
         {cells.map((cell, i) => (
           <div
             key={i}
-            title={`${cell.count} 条想法`}
+            title={t('heatmap.cellTitle', { count: cell.count })}
             className={`aspect-square rounded-[2px] transition-colors ${
               cell.isCurrentMonth
                 ? getCellColor(cell.count)
-                : 'bg-slate-800/30'
+                : 'bg-slate-100 dark:bg-slate-800/30'
             }`}
           />
         ))}
@@ -126,7 +127,7 @@ export default function HeatmapGrid({ atoms }: Props) {
       {/* Legend */}
       <div className="mt-2 flex items-center justify-end gap-1 text-[10px] text-slate-600">
         <span>{t('heatmap.legend.less')}</span>
-        <div className="h-2.5 w-2.5 rounded-sm bg-slate-800" />
+        <div className="h-2.5 w-2.5 rounded-sm bg-slate-200 dark:bg-slate-800" />
         <div className="h-2.5 w-2.5 rounded-sm bg-violet-400/70" />
         <div className="h-2.5 w-2.5 rounded-sm bg-violet-500/80" />
         <div className="h-2.5 w-2.5 rounded-sm bg-violet-700/80" />

@@ -1,5 +1,12 @@
 // 统一 fetch 封装；dev 走 vite proxy，prod 同源
 const BASE = ''
+const getLang = () => {
+  try {
+    return localStorage.getItem('sparkling-lang') === 'en' ? 'en' : 'zh'
+  } catch {
+    return 'zh'
+  }
+}
 
 interface ApiErrorBody {
   message?: string
@@ -36,7 +43,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    throw new ApiError(`无法连接后端服务：${message}`)
+    throw new ApiError(getLang() === 'en' ? `Cannot connect to backend service: ${message}` : `无法连接后端服务：${message}`)
   }
   if (!res.ok) throw new ApiError(await parseErrorMessage(res), res.status)
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T)

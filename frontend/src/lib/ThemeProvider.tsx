@@ -44,6 +44,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const r = resolveTheme(theme)
     setResolved(r)
     const root = document.documentElement
+    root.style.colorScheme = r
     if (r === 'dark') {
       root.classList.add('dark')
     } else {
@@ -59,6 +60,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         const r = resolveTheme('system')
         setResolved(r)
         const root = document.documentElement
+        root.style.colorScheme = r
         if (r === 'dark') root.classList.add('dark')
         else root.classList.remove('dark')
       }

@@ -5,9 +5,11 @@ import TaskCalendar from '../components/tasks/TaskCalendar'
 import TaskList from '../components/tasks/TaskList'
 import TaskModal from '../components/tasks/TaskModal'
 import { useToast } from '../components/useToast'
+import { useI18n } from '../lib/I18nProvider'
 
 export default function Tasks() {
   const { tasks, loading, loadTasks, addTask, updateTask, toggleComplete, deleteTask } = useTaskStore()
+  const { t } = useI18n()
   const { show: showToast } = useToast()
 
   const [modalOpen, setModalOpen] = useState(false)
@@ -21,10 +23,10 @@ export default function Tasks() {
   const handleSave = async (payload: TaskCreatePayload) => {
     if (editingTask) {
       await updateTask(editingTask.id, payload)
-      showToast('任务已更新', 'success')
+      showToast(t('tasks.updated'), 'success')
     } else {
       await addTask(payload)
-      showToast('任务已创建', 'success')
+      showToast(t('tasks.created'), 'success')
     }
   }
 
@@ -35,7 +37,7 @@ export default function Tasks() {
 
   const handleDelete = async (id: string) => {
     await deleteTask(id)
-    showToast('已删除', 'info')
+    showToast(t('common.deleted'), 'info')
   }
 
   const openCreate = () => {
@@ -47,19 +49,19 @@ export default function Tasks() {
     <div className="relative mx-auto w-full max-w-7xl px-4 py-6 md:px-6">
       {/* 页头 */}
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-100">任务</h1>
+        <h1 className="text-lg font-semibold text-slate-950 dark:text-slate-100">{t('tasks.title')}</h1>
         <button
           type="button"
           onClick={openCreate}
           className="flex items-center gap-1.5 rounded-lg bg-violet-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-violet-400"
         >
           <span className="text-base leading-none">+</span>
-          新建任务
+          {t('tasks.new')}
         </button>
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-20 text-sm text-slate-500">加载中…</div>
+        <div className="flex items-center justify-center py-20 text-sm text-slate-500">{t('common.loading')}</div>
       ) : (
         <div className="flex flex-col gap-0 md:grid md:grid-cols-[1fr_320px] md:gap-6 lg:grid-cols-[1fr_360px]">
           {/* 左列：即将截止 + 日历 */}

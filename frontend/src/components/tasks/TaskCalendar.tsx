@@ -9,6 +9,7 @@ import {
   format, max, min,
 } from 'date-fns'
 import type { Task } from '../../lib/taskStore'
+import { useI18n } from '../../lib/I18nProvider'
 
 interface Props {
   tasks: Task[]
@@ -86,8 +87,10 @@ function computeLanes(tasks: Task[], weekDays: Date[]): Bar[][] {
 }
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
+const WEEKDAYS_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 export default function TaskCalendar({ tasks, onDateClick }: Props) {
+  const { lang } = useI18n()
   const [currentMonth, setCurrentMonth] = useState(new Date())
 
   const weeks = useMemo(() => {
@@ -106,38 +109,38 @@ export default function TaskCalendar({ tasks, onDateClick }: Props) {
   }, [currentMonth, tasks])
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
       {/* 月份导航 */}
-      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
         <button
           type="button"
           onClick={() => setCurrentMonth((m) => subMonths(m, 1))}
-          className="rounded-md px-2 py-1 text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+          className="rounded-md px-2 py-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
         >
           ‹
         </button>
-        <span className="text-sm font-medium text-slate-200">
-          {format(currentMonth, 'yyyy 年 M 月')}
+        <span className="text-sm font-medium text-slate-800 dark:text-slate-200">
+          {format(currentMonth, lang === 'zh' ? 'yyyy 年 M 月' : 'MMM yyyy')}
         </span>
         <button
           type="button"
           onClick={() => setCurrentMonth((m) => addMonths(m, 1))}
-          className="rounded-md px-2 py-1 text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+          className="rounded-md px-2 py-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
         >
           ›
         </button>
       </div>
 
       {/* 星期表头 */}
-      <div className="grid grid-cols-7 border-b border-slate-800">
-        {WEEKDAYS.map((d) => (
+      <div className="grid grid-cols-7 border-b border-slate-200 dark:border-slate-800">
+        {(lang === 'zh' ? WEEKDAYS : WEEKDAYS_EN).map((d) => (
           <div key={d} className="py-2 text-center text-xs text-slate-600">{d}</div>
         ))}
       </div>
 
       {/* 周行 */}
       {weeks.map(({ weekStart, weekDays, lanes }) => (
-        <div key={weekStart.toISOString()} className="border-b border-slate-800 last:border-b-0">
+        <div key={weekStart.toISOString()} className="border-b border-slate-200 last:border-b-0 dark:border-slate-800">
           {/* 日期数字 */}
           <div className="grid grid-cols-7">
             {weekDays.map((day) => (
@@ -145,9 +148,9 @@ export default function TaskCalendar({ tasks, onDateClick }: Props) {
                 key={day.toISOString()}
                 type="button"
                 onClick={() => onDateClick(day)}
-                className={`py-1.5 text-center text-xs transition hover:bg-slate-800 ${
+                className={`py-1.5 text-center text-xs transition hover:bg-slate-100 dark:hover:bg-slate-800 ${
                   !isSameMonth(day, currentMonth)
-                    ? 'text-slate-700'
+                    ? 'text-slate-300 dark:text-slate-700'
                     : isToday(day)
                       ? 'font-bold text-violet-400'
                       : 'text-slate-400'

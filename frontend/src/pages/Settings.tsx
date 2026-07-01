@@ -3,6 +3,7 @@ import { Eye, EyeOff, Info } from 'lucide-react'
 import { useToast } from '../components/useToast'
 import { api, ApiError } from '../lib/api'
 import { useSparklingStore } from '../lib/store'
+import { useI18n } from '../lib/I18nProvider'
 
 const dims = [384, 512, 768, 1024, 1536, 2048, 2560, 3072, 4096]
 
@@ -48,6 +49,7 @@ interface EmbeddingStatusRaw {
 }
 
 export default function Settings() {
+  const { t } = useI18n()
   const { show } = useToast()
   const [embedBaseUrl, setEmbedBaseUrl] = useState('https://api.openai.com/v1')
   const [embedApiKey, setEmbedApiKey] = useState('')
@@ -104,7 +106,7 @@ export default function Settings() {
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
-        show(`读取 AI 设置失败：${message}`, 'error')
+        show(t('settings.readAiFailed', { message }), 'error')
       })
   }
 
@@ -116,7 +118,7 @@ export default function Settings() {
         if (rebuilding && status.pending === 0 && status.running === 0) {
           setRebuilding(false)
           loadAiSettings()
-          show(status.failed > 0 ? 'Embedding 重建完成，但有失败任务' : 'Embedding 重建完成', status.failed > 0 ? 'warning' : 'success')
+          show(status.failed > 0 ? t('settings.embeddingDoneWithFailures') : t('settings.embeddingDone'), status.failed > 0 ? 'warning' : 'success')
         }
       })
       .catch(() => {
@@ -147,7 +149,7 @@ export default function Settings() {
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
-        show(`读取数据库设置失败：${message}`, 'error')
+        show(t('settings.readDbFailed', { message }), 'error')
       })
   }, [show])
 
@@ -173,7 +175,7 @@ export default function Settings() {
       setEmbedApiKey(s.embed_api_key ?? '')
       setEmbedApiKeyDirty(false)
       setEmbedApiKeyMasked(s.embed_api_key_masked)
-      show('Embedding 设置已保存', 'success')
+      show(t('settings.embedSaved'), 'success')
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
       show(message, 'error')
@@ -186,7 +188,7 @@ export default function Settings() {
       setChatApiKey(s.chat_api_key ?? '')
       setChatApiKeyDirty(false)
       setChatApiKeyMasked(s.chat_api_key_masked)
-      show('Chat 设置已保存', 'success')
+      show(t('settings.chatSaved'), 'success')
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
       show(message, 'error')
@@ -200,7 +202,7 @@ export default function Settings() {
         link_threshold_suggest: suggestThreshold,
       })
       await loadInitial()
-      show('阈值已保存', 'success')
+      show(t('settings.thresholdSaved'), 'success')
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
       show(message, 'error')
@@ -216,11 +218,11 @@ export default function Settings() {
     }
     try {
       const r = await api.post<TestProviderRaw>('/api/settings/test-provider')
-      if (r.ok) show(`Embedding 连接成功 (${r.latency_ms}ms)`, 'success')
-      else show(`Embedding 连接失败：${r.error}`, 'error')
+      if (r.ok) show(t('settings.embedConnected', { ms: r.latency_ms }), 'success')
+      else show(t('settings.embedConnectFailed', { message: r.error ?? '' }), 'error')
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
-      show(`Embedding 连接失败：${message}`, 'error')
+      show(t('settings.embedConnectFailed', { message }), 'error')
     }
   }
 
@@ -233,11 +235,11 @@ export default function Settings() {
     }
     try {
       const r = await api.post<TestProviderRaw>('/api/settings/test-chat-provider')
-      if (r.ok) show(`Chat 连接成功 (${r.latency_ms}ms)`, 'success')
-      else show(`Chat 连接失败：${r.error}`, 'error')
+      if (r.ok) show(t('settings.chatConnected', { ms: r.latency_ms }), 'success')
+      else show(t('settings.chatConnectFailed', { message: r.error ?? '' }), 'error')
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
-      show(`Chat 连接失败：${message}`, 'error')
+      show(t('settings.chatConnectFailed', { message }), 'error')
     }
   }
 
@@ -256,7 +258,7 @@ export default function Settings() {
       loadEmbeddingStatus()
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
-      show(`重建失败：${message}`, 'error')
+      show(t('settings.rebuildFailed', { message }), 'error')
     }
   }
 
@@ -264,11 +266,11 @@ export default function Settings() {
     setRetryingEmbeddings(true)
     try {
       const result = await api.post<{ retried: number }>('/api/settings/retry-failed-embeddings')
-      show(result.retried > 0 ? `已重试 ${result.retried} 个失败任务` : '没有失败任务需要重试', result.retried > 0 ? 'success' : 'info')
+      show(result.retried > 0 ? t('settings.retryResult', { count: result.retried }) : t('settings.noFailedTasks'), result.retried > 0 ? 'success' : 'info')
       loadEmbeddingStatus()
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
-      show(`重试失败：${message}`, 'error')
+      show(t('settings.retryFailed', { message }), 'error')
     } finally {
       setRetryingEmbeddings(false)
     }
@@ -276,7 +278,7 @@ export default function Settings() {
 
   const saveDatabaseSettings = async () => {
     if (!databaseValid) {
-      show(dbBackend === 'sqlite' ? '请填写 SQLite 数据库路径' : '请填写 PostgreSQL URL', 'warning')
+      show(dbBackend === 'sqlite' ? t('settings.dbPathRequired') : t('settings.postgresqlRequired'), 'warning')
       return
     }
 
@@ -291,7 +293,7 @@ export default function Settings() {
       setDbPath(next.db_path ?? './sparkling.db')
       setPostgresqlUrl(next.postgresql_url ?? '')
       await loadInitial()
-      show('数据库已切换；不会迁移已有数据', 'success')
+      show(t('settings.dbSaved'), 'success')
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
       show(message, 'error')
@@ -302,16 +304,16 @@ export default function Settings() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 px-4 py-6 md:px-6">
-      <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <h1 className="text-lg font-semibold text-slate-100">数据库</h1>
-        <div className="mt-4 flex w-fit overflow-hidden rounded-md border border-slate-700">
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
+        <h1 className="text-lg font-semibold text-slate-950 dark:text-slate-100">{t('settings.database')}</h1>
+        <div className="mt-4 flex w-fit overflow-hidden rounded-md border border-slate-200 dark:border-slate-700">
           <button
             type="button"
             onClick={() => setDbBackend('sqlite')}
             className={`px-4 py-2 text-sm transition ${
               dbBackend === 'sqlite'
-                ? 'bg-slate-700 text-slate-100'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+                ? 'bg-violet-50 text-slate-950 dark:bg-slate-700 dark:text-slate-100'
+                : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'
             }`}
           >
             SQLite
@@ -319,10 +321,10 @@ export default function Settings() {
           <button
             type="button"
             onClick={() => setDbBackend('postgresql')}
-            className={`border-l border-slate-700 px-4 py-2 text-sm transition ${
+            className={`border-l border-slate-200 px-4 py-2 text-sm transition dark:border-slate-700 ${
               dbBackend === 'postgresql'
-                ? 'bg-slate-700 text-slate-100'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+                ? 'bg-violet-50 text-slate-950 dark:bg-slate-700 dark:text-slate-100'
+                : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'
             }`}
           >
             PostgreSQL
@@ -331,29 +333,29 @@ export default function Settings() {
 
         <div className="mt-4 grid gap-4">
           {dbBackend === 'sqlite' ? (
-            <label className="text-sm text-slate-400">
-              SQLite DB Path
+            <label className="text-sm text-slate-500 dark:text-slate-400">
+              {t('settings.sqlitePath')}
               <input
                 value={dbPath}
                 onChange={(event) => setDbPath(event.target.value)}
-                className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:border-violet-400"
+                className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-950 outline-none focus:border-violet-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
               />
             </label>
           ) : (
-            <label className="text-sm text-slate-400">
-              PostgreSQL URL
+            <label className="text-sm text-slate-500 dark:text-slate-400">
+              {t('settings.postgresqlUrl')}
               <input
                 value={postgresqlUrl}
                 onChange={(event) => setPostgresqlUrl(event.target.value)}
                 placeholder="postgresql://user:password@localhost:5432/sparkling"
-                className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:border-violet-400"
+                className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-950 outline-none focus:border-violet-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
               />
             </label>
           )}
         </div>
 
-        <div className="mt-4 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-400">
-          切换会立即连接目标数据库并升级 schema；现有数据不会自动迁移。
+        <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
+          {t('settings.dbHint')}
         </div>
 
         <div className="mt-5 flex justify-end">
@@ -363,24 +365,24 @@ export default function Settings() {
             onClick={() => void saveDatabaseSettings()}
             className="rounded-md bg-violet-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
           >
-            {dbSaving ? '切换中…' : '切换数据库'}
+            {dbSaving ? t('settings.switching') : t('settings.switchDatabase')}
           </button>
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <h1 className="text-lg font-semibold text-slate-100">AI Provider</h1>
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
+        <h1 className="text-lg font-semibold text-slate-950 dark:text-slate-100">{t('settings.aiProvider')}</h1>
 
         {/* ── Embedding ── */}
-        <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/50 p-4">
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50">
           <h2 className="text-sm font-medium text-violet-400">Embedding</h2>
-          <p className="mt-1 text-xs text-slate-500">用于生成想法语义向量，支持 OpenAI 兼容接口（OpenAI / DeepSeek / 智谱 / Ollama 等）。</p>
+          <p className="mt-1 text-xs text-slate-500">{t('settings.embedDesc')}</p>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <label className="text-sm text-slate-400">
+            <label className="text-sm text-slate-500 dark:text-slate-400">
               Base URL
-              <input value={embedBaseUrl} onChange={(event) => setEmbedBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
+              <input value={embedBaseUrl} onChange={(event) => setEmbedBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none placeholder:text-slate-400 focus:border-violet-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-600" />
             </label>
-            <label className="text-sm text-slate-400">
+            <label className="text-sm text-slate-500 dark:text-slate-400">
               API Key
               <div className="relative mt-2">
                 <input
@@ -390,15 +392,15 @@ export default function Settings() {
                     setEmbedApiKey(event.target.value)
                     setEmbedApiKeyDirty(true)
                   }}
-                  placeholder={embedApiKeyMasked ? `已保存 ${embedApiKeyMasked}` : '本地模型留空即可'}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 pr-11 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600"
+                  placeholder={embedApiKeyMasked ? t('settings.savedKey', { value: embedApiKeyMasked }) : t('settings.apiKeyLocal')}
+                  className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 pr-11 text-slate-950 outline-none placeholder:text-slate-400 focus:border-violet-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-600"
                 />
                 <button
                   type="button"
                   onClick={() => setEmbedApiKeyVisible((value) => !value)}
-                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
-                  aria-label={embedApiKeyVisible ? '隐藏 Embedding API Key' : '显示 Embedding API Key'}
-                  title={embedApiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
+                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                  aria-label={embedApiKeyVisible ? t('settings.hideKey') : t('settings.showKey')}
+                  title={embedApiKeyVisible ? t('settings.hideKey') : t('settings.showKey')}
                 >
                   {embedApiKeyVisible ? (
                     <EyeOff size={16} aria-hidden="true" />
@@ -408,16 +410,16 @@ export default function Settings() {
                 </button>
               </div>
             </label>
-            <label className="text-sm text-slate-400">
+            <label className="text-sm text-slate-500 dark:text-slate-400">
               Embed Model
-              <input value={embedModel} onChange={(event) => setEmbedModel(event.target.value)} disabled={embedModelLocked && !dimEditing} placeholder="text-embedding-3-small" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600 disabled:cursor-not-allowed disabled:bg-slate-900 disabled:text-slate-500" />
+              <input value={embedModel} onChange={(event) => setEmbedModel(event.target.value)} disabled={embedModelLocked && !dimEditing} placeholder="text-embedding-3-small" className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none placeholder:text-slate-400 focus:border-violet-400 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-600 dark:disabled:bg-slate-900 dark:disabled:text-slate-500" />
             </label>
-            <label className="text-sm text-slate-400">
+            <label className="text-sm text-slate-500 dark:text-slate-400">
               <span className="group relative inline-flex items-center gap-1.5">
                 Embed Dim
                 <Info size={14} className="cursor-help text-slate-500 transition hover:text-slate-300" />
-                <span className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden w-64 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs leading-relaxed text-slate-300 shadow-xl group-hover:block">
-                  Embedding 向量的维度，不同模型支持的范围不同（常见 384–4096），请按模型实际输出选择。维度越高，语义表示越精细，但计算与存储开销也越大。
+                <span className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden w-64 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-600 shadow-xl group-hover:block dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+                  {t('settings.embedDimHelp')}
                 </span>
               </span>
               <input
@@ -428,7 +430,7 @@ export default function Settings() {
                 onChange={(event) => setEmbedDim(Number(event.target.value))}
                 disabled={embedDimLocked && !dimEditing}
                 list="embed-dim-presets"
-                className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 h-10 disabled:cursor-not-allowed disabled:bg-slate-900 disabled:text-slate-500"
+                className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-violet-400 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:disabled:bg-slate-900 dark:disabled:text-slate-500"
               />
               <datalist id="embed-dim-presets">
                 {dims.map((dim) => (
@@ -439,9 +441,9 @@ export default function Settings() {
                 <button
                   type="button"
                   onClick={() => { setDimEditing(true); setSavedEmbedDim(embedDim) }}
-                  className="mt-2 rounded-md border border-amber-500/50 px-3 py-1.5 text-xs text-amber-400 transition hover:bg-amber-500/10 hover:text-amber-300"
+                  className="mt-2 rounded-md border border-amber-500/50 px-3 py-1.5 text-xs text-amber-600 transition hover:bg-amber-50 hover:text-amber-700 dark:text-amber-400 dark:hover:bg-amber-500/10 dark:hover:text-amber-300"
                 >
-                  更改维度（重建 embedding）
+                  {t('settings.changeDim')}
                 </button>
               )}
               {dimEditing && (
@@ -453,49 +455,49 @@ export default function Settings() {
                         void startRebuild()
                         setDimEditing(false)
                       } else {
-                        show('维度未变更，无需重建', 'info')
+                        show(t('settings.dimUnchanged'), 'info')
                       }
                     }}
                     className="rounded-md bg-rose-500 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-rose-400"
                   >
-                    确认重建
+                    {t('settings.confirmRebuild')}
                   </button>
                   <button
                     type="button"
                     onClick={() => { setEmbedDim(savedEmbedDim); setDimEditing(false) }}
-                    className="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
                   >
-                    取消
+                    {t('common.cancel')}
                   </button>
                 </div>
               )}
             </label>
           </div>
           <div className="mt-4 flex justify-end gap-3">
-            <button type="button" onClick={testEmbedConnection} className="rounded-md border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:bg-slate-800">
-              测试连接
+            <button type="button" onClick={testEmbedConnection} className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+              {t('settings.testConnection')}
             </button>
             <button type="button" onClick={saveEmbedSettings} className="rounded-md bg-violet-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-violet-300">
-              保存
+              {t('common.save')}
             </button>
           </div>
           {embeddingStatus && (
-            <div className="mt-4 rounded-md border border-slate-800 bg-slate-950 px-3 py-3">
+            <div className="mt-4 rounded-md border border-slate-200 bg-white px-3 py-3 dark:border-slate-800 dark:bg-slate-950">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm font-medium text-slate-200">Embedding 同步</div>
+                  <div className="text-sm font-medium text-slate-800 dark:text-slate-200">{t('settings.embeddingSync')}</div>
                   <div className="mt-1 text-xs text-slate-500">
-                    {embeddingStatus.embedded_atoms} / {embeddingStatus.active_atoms} 已同步
-                    {embeddingStatus.stale_atoms > 0 ? `，${embeddingStatus.stale_atoms} 条待更新` : ''}
+                    {t('settings.synced', { done: embeddingStatus.embedded_atoms, total: embeddingStatus.active_atoms })}
+                    {embeddingStatus.stale_atoms > 0 ? t('settings.stale', { count: embeddingStatus.stale_atoms }) : ''}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 text-xs">
-                  <span className="rounded border border-slate-700 px-2 py-1 text-slate-400">pending {embeddingStatus.pending}</span>
-                  <span className="rounded border border-slate-700 px-2 py-1 text-slate-400">running {embeddingStatus.running}</span>
-                  <span className={`rounded border px-2 py-1 ${embeddingStatus.failed > 0 ? 'border-rose-500/60 text-rose-300' : 'border-slate-700 text-slate-400'}`}>failed {embeddingStatus.failed}</span>
+                  <span className="rounded border border-slate-300 px-2 py-1 text-slate-500 dark:border-slate-700 dark:text-slate-400">pending {embeddingStatus.pending}</span>
+                  <span className="rounded border border-slate-300 px-2 py-1 text-slate-500 dark:border-slate-700 dark:text-slate-400">running {embeddingStatus.running}</span>
+                  <span className={`rounded border px-2 py-1 ${embeddingStatus.failed > 0 ? 'border-rose-500/60 text-rose-500 dark:text-rose-300' : 'border-slate-300 text-slate-500 dark:border-slate-700 dark:text-slate-400'}`}>failed {embeddingStatus.failed}</span>
                 </div>
               </div>
-              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-800">
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
                 <div className="h-full bg-violet-400 transition-all" style={{ width: `${embeddingProgress}%` }} />
               </div>
               {embeddingStatus.last_error && (
@@ -508,9 +510,9 @@ export default function Settings() {
                   type="button"
                   onClick={retryFailedEmbeddings}
                   disabled={retryingEmbeddings || embeddingStatus.failed === 0}
-                  className="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-600"
+                  className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:disabled:border-slate-800 dark:disabled:text-slate-600"
                 >
-                  {retryingEmbeddings ? '重试中…' : '重试失败任务'}
+                  {retryingEmbeddings ? t('settings.retrying') : t('settings.retryFailedTasks')}
                 </button>
               </div>
             </div>
@@ -518,15 +520,15 @@ export default function Settings() {
         </div>
 
         {/* ── Chat ── */}
-        <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/50 p-4">
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50">
           <h2 className="text-sm font-medium text-emerald-400">Chat</h2>
-          <p className="mt-1 text-xs text-slate-500">用于想法摘要、主题聚类、内容建议等 LLM 功能（Phase 2）。当前仅存储配置。</p>
+          <p className="mt-1 text-xs text-slate-500">{t('settings.chatDesc')}</p>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <label className="text-sm text-slate-400">
+            <label className="text-sm text-slate-500 dark:text-slate-400">
               Base URL
-              <input value={chatBaseUrl} onChange={(event) => setChatBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
+              <input value={chatBaseUrl} onChange={(event) => setChatBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none placeholder:text-slate-400 focus:border-violet-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-600" />
             </label>
-            <label className="text-sm text-slate-400">
+            <label className="text-sm text-slate-500 dark:text-slate-400">
               API Key
               <div className="relative mt-2">
                 <input
@@ -536,15 +538,15 @@ export default function Settings() {
                     setChatApiKey(event.target.value)
                     setChatApiKeyDirty(true)
                   }}
-                  placeholder={chatApiKeyMasked ? `已保存 ${chatApiKeyMasked}` : 'sk-...'}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 pr-11 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600"
+                  placeholder={chatApiKeyMasked ? t('settings.savedKey', { value: chatApiKeyMasked }) : 'sk-...'}
+                  className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 pr-11 text-slate-950 outline-none placeholder:text-slate-400 focus:border-violet-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-600"
                 />
                 <button
                   type="button"
                   onClick={() => setChatApiKeyVisible((value) => !value)}
-                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
-                  aria-label={chatApiKeyVisible ? '隐藏 Chat API Key' : '显示 Chat API Key'}
-                  title={chatApiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
+                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                  aria-label={chatApiKeyVisible ? t('settings.hideKey') : t('settings.showKey')}
+                  title={chatApiKeyVisible ? t('settings.hideKey') : t('settings.showKey')}
                 >
                   {chatApiKeyVisible ? (
                     <EyeOff size={16} aria-hidden="true" />
@@ -554,47 +556,47 @@ export default function Settings() {
                 </button>
               </div>
             </label>
-            <label className="text-sm text-slate-400">
+            <label className="text-sm text-slate-500 dark:text-slate-400">
               Chat Model
-              <input value={chatModel} onChange={(event) => setChatModel(event.target.value)} placeholder="gpt-4.1-mini" className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-violet-400 placeholder:text-slate-600" />
+              <input value={chatModel} onChange={(event) => setChatModel(event.target.value)} placeholder="gpt-4.1-mini" className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none placeholder:text-slate-400 focus:border-violet-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-600" />
             </label>
           </div>
           <div className="mt-4 flex justify-end gap-3">
-            <button type="button" onClick={testChatConnection} className="rounded-md border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:bg-slate-800">
-              测试连接
+            <button type="button" onClick={testChatConnection} className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+              {t('settings.testConnection')}
             </button>
             <button type="button" onClick={saveChatSettings} className="rounded-md bg-violet-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-violet-300">
-              保存
+              {t('common.save')}
             </button>
           </div>
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <h2 className="text-lg font-semibold text-slate-100">关联阈值</h2>
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
+        <h2 className="text-lg font-semibold text-slate-950 dark:text-slate-100">{t('settings.thresholds')}</h2>
         <div className="mt-4 space-y-5">
-          <label className="block text-sm text-slate-400">
+          <label className="block text-sm text-slate-500 dark:text-slate-400">
             <div className="mb-2 flex justify-between">
-              <span>自动确认</span>
-              <span className="font-mono text-slate-100">{autoThreshold.toFixed(2)}</span>
+              <span>{t('settings.autoConfirm')}</span>
+              <span className="font-mono text-slate-950 dark:text-slate-100">{autoThreshold.toFixed(2)}</span>
             </div>
             <input type="range" min="0" max="1" step="0.01" value={autoThreshold} onChange={(event) => setAutoThreshold(Number(event.target.value))} className="w-full accent-violet-400" />
           </label>
-          <label className="block text-sm text-slate-400">
+          <label className="block text-sm text-slate-500 dark:text-slate-400">
             <div className="mb-2 flex justify-between">
-              <span>建议门槛</span>
-              <span className="font-mono text-slate-100">{suggestThreshold.toFixed(2)}</span>
+              <span>{t('settings.suggestThreshold')}</span>
+              <span className="font-mono text-slate-950 dark:text-slate-100">{suggestThreshold.toFixed(2)}</span>
             </div>
             <input type="range" min="0" max="1" step="0.01" value={suggestThreshold} onChange={(event) => setSuggestThreshold(Number(event.target.value))} className="w-full accent-violet-400" />
           </label>
-          {!thresholdsValid && <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-400">自动确认必须至少比建议门槛高 0.05</div>}
+          {!thresholdsValid && <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-600 dark:text-amber-400">{t('settings.thresholdInvalid')}</div>}
           <button
             type="button"
             disabled={!thresholdsValid}
             onClick={saveThresholds}
             className="rounded-md bg-violet-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
           >
-            保存阈值
+            {t('settings.saveThresholds')}
           </button>
         </div>
       </section>

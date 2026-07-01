@@ -6,8 +6,10 @@ import { useToast } from '../components/useToast'
 import { ConflictError } from '../lib/mock'
 import { formatDateTime } from '../lib/time'
 import { useSparklingStore } from '../lib/store'
+import { useI18n } from '../lib/I18nProvider'
 
 export default function AtomDetail() {
+  const { lang, t } = useI18n()
   const { id } = useParams()
   const navigate = useNavigate()
   const { show } = useToast()
@@ -54,7 +56,7 @@ export default function AtomDetail() {
     if (!atom) return
     const next = draft.trim()
     if (!next) {
-      show('内容不能为空', 'warning')
+      show(t('atom.contentRequired'), 'warning')
       return
     }
     if (next === atom.content) {
@@ -64,37 +66,37 @@ export default function AtomDetail() {
     try {
       await updateAtom(atom.id, { content: next })
       setEditing(false)
-      show('已保存', 'success')
+      show(t('common.saved'), 'success')
     } catch (error) {
       if (error instanceof ConflictError) {
-        show('版本冲突，已重新加载最新内容', 'warning')
+        show(t('atom.conflict'), 'warning')
         await loadInitial()
         return
       }
-      show('保存失败', 'error')
+      show(t('common.saveFailed'), 'error')
     }
   }
 
   const remove = async () => {
     if (!atom) return
-    if (!window.confirm('删除后会保留 30 天，之后自动清理。确认删除？')) return
+    if (!window.confirm(t('atom.confirmDelete'))) return
     try {
       await deleteAtom(atom.id)
-      show('已删除', 'info')
+      show(t('common.deleted'), 'info')
       navigate('/inbox', { replace: true })
     } catch {
-      show('删除失败', 'error')
+      show(t('common.deleteFailed'), 'error')
     }
   }
 
   if (loading) {
-    return <div className="mx-auto max-w-5xl px-4 py-6 text-slate-500">加载中…</div>
+    return <div className="mx-auto max-w-5xl px-4 py-6 text-slate-500">{t('common.loading')}</div>
   }
 
   if (!atom) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-6">
-        <EmptyState icon="∅" title="没有找到这个想法" description="它可能已经被删除，或 mock 数据已刷新。" />
+        <EmptyState icon="∅" title={t('atom.notFound.title')} description={t('atom.notFound.desc')} />
       </div>
     )
   }
@@ -105,19 +107,19 @@ export default function AtomDetail() {
         <button
           type="button"
           onClick={() => navigate(-1)}
-          className="mb-4 rounded-md border border-slate-800 px-3 py-2 text-sm text-slate-400 transition hover:bg-slate-900 hover:text-slate-100"
+          className="mb-4 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-slate-100"
         >
-          ← 返回
+          {t('common.back')}
         </button>
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
           <div className="mb-4 flex flex-wrap justify-end gap-2">
             {!editing && (
               <button
                 type="button"
                 onClick={() => setEditing(true)}
-                className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
               >
-                变更
+                {t('common.edit')}
               </button>
             )}
             {editing && (
@@ -126,15 +128,15 @@ export default function AtomDetail() {
                 onClick={() => void save()}
                 className="rounded-md bg-violet-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-violet-400"
               >
-                保存
+                {t('common.save')}
               </button>
             )}
             <button
               type="button"
               onClick={() => void remove()}
-              className="rounded-md border border-rose-900/70 px-3 py-2 text-sm text-rose-300 transition hover:bg-rose-950/60 hover:text-rose-100"
+              className="rounded-md border border-rose-200 px-3 py-2 text-sm text-rose-600 transition hover:bg-rose-50 hover:text-rose-700 dark:border-rose-900/70 dark:text-rose-300 dark:hover:bg-rose-950/60 dark:hover:text-rose-100"
             >
-              删除
+              {t('common.delete')}
             </button>
           </div>
           {editing ? (
@@ -142,16 +144,16 @@ export default function AtomDetail() {
               ref={textareaRef}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              className="min-h-48 w-full resize-none bg-transparent text-2xl leading-10 text-slate-100 outline-none"
+              className="min-h-48 w-full resize-none bg-transparent text-2xl leading-10 text-slate-950 outline-none dark:text-slate-100"
             />
           ) : (
             <button type="button" onClick={() => setEditing(true)} className="block w-full text-left">
-              <p className="whitespace-pre-wrap text-2xl leading-10 text-slate-100">{atom.content}</p>
+              <p className="whitespace-pre-wrap text-2xl leading-10 text-slate-950 dark:text-slate-100">{atom.content}</p>
             </button>
           )}
-          <div className="mt-6 flex flex-wrap gap-3 border-t border-slate-800 pt-4 text-xs text-slate-500">
-            <span>创建 {formatDateTime(atom.createdAt)}</span>
-            <span>状态 {atom.status}</span>
+          <div className="mt-6 flex flex-wrap gap-3 border-t border-slate-200 pt-4 text-xs text-slate-500 dark:border-slate-800">
+            <span>{t('atom.created', { value: formatDateTime(atom.createdAt, lang) })}</span>
+            <span>{t('atom.status', { value: atom.status })}</span>
             <span>version {atom.version}</span>
           </div>
         </div>
@@ -159,7 +161,7 @@ export default function AtomDetail() {
 
       <aside className="space-y-6">
         <section>
-          <h2 className="mb-3 text-sm font-medium text-slate-100">已确认 ({related.confirmed.length})</h2>
+          <h2 className="mb-3 text-sm font-medium text-slate-950 dark:text-slate-100">{t('link.confirmedTitle')} ({related.confirmed.length})</h2>
           <div className="space-y-2">
             {related.confirmed.map((item) => {
               const target = atoms.find((candidate) => candidate.id === item.atomId)
@@ -168,7 +170,7 @@ export default function AtomDetail() {
               return (
                 <div
                   key={item.linkId}
-                  className="flex items-start gap-2 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm leading-6 text-slate-300 transition hover:border-slate-700 hover:bg-slate-800"
+                  className="flex items-start gap-2 rounded-xl border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:shadow-none dark:hover:border-slate-700 dark:hover:bg-slate-800"
                 >
                   <Link to={`/atoms/${target.id}`} className="flex min-w-0 flex-1 gap-2">
                     <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
@@ -177,7 +179,7 @@ export default function AtomDetail() {
                   <button
                     type="button"
                     disabled={isProcessing}
-                    title="取消关联"
+                    title={t('link.cancel')}
                     onClick={async () => {
                       setPendingLinkId(item.linkId)
                       try {
@@ -193,12 +195,12 @@ export default function AtomDetail() {
                 </div>
               )
             })}
-            {related.confirmed.length === 0 && <div className="text-sm text-slate-500">还没有已确认关联</div>}
+            {related.confirmed.length === 0 && <div className="text-sm text-slate-500">{t('link.noConfirmed')}</div>}
           </div>
         </section>
 
         <section>
-          <h2 className="mb-3 text-sm font-medium text-slate-100">AI 建议 ({related.suggested.length})</h2>
+          <h2 className="mb-3 text-sm font-medium text-slate-950 dark:text-slate-100">{t('link.aiSuggestedTitle')} ({related.suggested.length})</h2>
           <div className="space-y-3">
             {related.suggested.map((item) => {
               const link = links.find((candidate) => candidate.id === item.linkId)
@@ -214,7 +216,7 @@ export default function AtomDetail() {
                 />
               )
             })}
-            {related.suggested.length === 0 && <div className="text-sm text-slate-500">没有待确认建议</div>}
+            {related.suggested.length === 0 && <div className="text-sm text-slate-500">{t('link.noSuggested')}</div>}
           </div>
         </section>
       </aside>

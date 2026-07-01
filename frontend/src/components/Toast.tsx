@@ -20,7 +20,7 @@ export default function Toast({ toasts, onDismiss }: Props) {
           key={toast.id}
           type="button"
           onClick={() => onDismiss(toast.id)}
-          className={`animate-suggestion-in rounded-xl border bg-slate-900 px-4 py-3 text-left text-sm shadow-xl ${toneClass[toast.tone]}`}
+          className={`animate-suggestion-in rounded-xl border bg-white px-4 py-3 text-left text-sm shadow-xl dark:bg-slate-900 ${toneClass[toast.tone]}`}
         >
           {toast.message}
         </button>

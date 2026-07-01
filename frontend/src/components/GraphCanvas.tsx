@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Graph, NodeEvent, CanvasEvent } from '@antv/g6'
 import type { IElementEvent } from '@antv/g6'
 import type { AtomMock, LinkMock } from '../lib/mock'
+import { useTheme } from '../lib/ThemeProvider'
+import { useI18n } from '../lib/I18nProvider'
 
 interface Props {
   atoms: AtomMock[]
@@ -64,6 +66,8 @@ const getSecondDegreeIds = (atomId: string, links: LinkMock[]) => {
 }
 
 export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: Props) {
+  const { resolved } = useTheme()
+  const { t } = useI18n()
   const containerRef = useRef<HTMLDivElement>(null)
   const graphRef = useRef<Graph | null>(null)
   const graphLifecycleRef = useRef(0)
@@ -87,6 +91,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
   const [focusId, setFocusId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [graphError, setGraphError] = useState<string | null>(null)
+  const isDark = resolved === 'dark'
 
   const visibleLinks = useMemo(() => {
     const atomIds = new Set(atoms.map((atom) => atom.id))
@@ -157,7 +162,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       container: graphMount,
       autoResize: true,
       animation: false,
-      background: '#020617',
+      background: isDark ? '#020617' : '#f8fafc',
       node: {
         type: 'circle',
         style: (d) => {
@@ -178,7 +183,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
             labelPlacement: 'bottom' as const,
             labelOffsetY: 2,
             labelFontSize: 9,
-            labelFill: '#475569',
+            labelFill: isDark ? '#475569' : '#64748b',
             labelWordWrap: false,
           }
         },
@@ -288,7 +293,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
           graphMount.remove()
         })
     }
-  }, [isActiveGraph])
+  }, [isActiveGraph, isDark])
 
   // 数据变化时更新图（re-render 重新布局）
   useEffect(() => {
@@ -378,42 +383,42 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
   }, [query, atoms, runGraphTask])
 
   return (
-    <div className="relative h-full min-h-[calc(100vh-3rem)] bg-slate-950 md:min-h-screen">
+    <div className="relative h-full min-h-[calc(100vh-3rem)] bg-slate-50 md:min-h-screen dark:bg-slate-950">
       {/* G6 画布挂载点 */}
       <div ref={containerRef} className="h-full w-full" />
       {graphError && (
-        <div className="absolute left-1/2 top-1/2 z-30 max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg border border-rose-500/50 bg-slate-950 px-4 py-3 text-sm leading-6 text-rose-200 shadow-xl">
-          图谱渲染失败：{graphError}
+        <div className="absolute left-1/2 top-1/2 z-30 max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg border border-rose-300 bg-white px-4 py-3 text-sm leading-6 text-rose-600 shadow-xl dark:border-rose-500/50 dark:bg-slate-950 dark:text-rose-200">
+          {t('graph.renderFailed', { message: graphError })}
         </div>
       )}
 
       {/* 左上：视图控制 */}
-      <div className="pointer-events-auto absolute left-4 top-4 z-20 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/95 p-2 shadow-xl backdrop-blur">
-        <div className="flex overflow-hidden rounded-md border border-slate-700">
+      <div className="pointer-events-auto absolute left-4 top-4 z-20 flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 p-2 shadow-xl backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+        <div className="flex overflow-hidden rounded-md border border-slate-200 dark:border-slate-700">
           <button
             type="button"
             onClick={() => setMode('all')}
             className={`px-3 py-1.5 text-sm transition ${
               mode === 'all'
-                ? 'bg-slate-700 text-slate-100'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+                ? 'bg-violet-50 text-slate-950 dark:bg-slate-700 dark:text-slate-100'
+                : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'
             }`}
           >
-            全图
+            {t('graph.all')}
           </button>
           <button
             type="button"
             onClick={() => { if (focusId) setMode('focus') }}
-            title={!focusId ? '先单击一个节点' : undefined}
-            className={`border-l border-slate-700 px-3 py-1.5 text-sm transition ${
+            title={!focusId ? t('graph.pickNodeFirst') : undefined}
+            className={`border-l border-slate-200 px-3 py-1.5 text-sm transition dark:border-slate-700 ${
               mode === 'focus'
-                ? 'bg-slate-700 text-slate-100'
+                ? 'bg-violet-50 text-slate-950 dark:bg-slate-700 dark:text-slate-100'
                 : focusId
-                  ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
-                  : 'cursor-not-allowed text-slate-600'
+                  ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'
+                  : 'cursor-not-allowed text-slate-400 dark:text-slate-600'
             }`}
           >
-            聚焦
+            {t('graph.focus')}
           </button>
         </div>
         <button
@@ -425,9 +430,9 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
               if (graph.rendered) await graph.fitView()
             })
           }}
-          className="rounded-md px-3 py-1.5 text-sm text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
+          className="rounded-md px-3 py-1.5 text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
         >
-          重置
+          {t('graph.reset')}
         </button>
         <button
           type="button"
@@ -436,9 +441,9 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
               if (graph.rendered) await graph.fitView()
             })
           }}
-          className="rounded-md px-3 py-1.5 text-sm text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
+          className="rounded-md px-3 py-1.5 text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
         >
-          适应
+          {t('graph.fit')}
         </button>
       </div>
 
@@ -447,15 +452,15 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索节点…"
-          className="w-full rounded-md border border-slate-800 bg-slate-900/95 px-3 py-1.5 text-sm text-slate-100 outline-none backdrop-blur placeholder:text-slate-600 focus:border-violet-400"
+          placeholder={t('graph.searchPlaceholder')}
+          className="w-full rounded-md border border-slate-200 bg-white/95 px-3 py-1.5 text-sm text-slate-950 outline-none backdrop-blur placeholder:text-slate-400 focus:border-violet-400 dark:border-slate-800 dark:bg-slate-900/95 dark:text-slate-100 dark:placeholder:text-slate-600"
         />
       </div>
 
       {/* Tooltip：渲染在 React 层，始终在 G6 画布上方 */}
       {tooltip && (
         <div
-          className="pointer-events-none absolute z-50 w-56 rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs leading-5 text-slate-300 shadow-2xl"
+          className="pointer-events-none absolute z-50 w-56 rounded-xl border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-700 shadow-2xl dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300"
           style={{
             left: tooltip.x,
             top: tooltip.y,
@@ -463,32 +468,32 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
           }}
         >
           <div className="line-clamp-4">{tooltip.content}</div>
-          <div className="mt-2 text-slate-500">关联数 {tooltip.degree}</div>
+          <div className="mt-2 text-slate-500">{t('link.count', { count: tooltip.degree })}</div>
         </div>
       )}
 
       {/* 左下：图例 */}
-      <div className="absolute bottom-4 left-4 z-20 space-y-2 rounded-xl border border-slate-800 bg-slate-900/95 p-3 text-xs text-slate-500 shadow-xl backdrop-blur">
+      <div className="absolute bottom-4 left-4 z-20 space-y-2 rounded-xl border border-slate-200 bg-white/95 p-3 text-xs text-slate-500 shadow-xl backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
         <div className="flex items-center gap-2">
           <span className="inline-block h-2 w-2 rounded-full bg-slate-500" />
-          <span>孤立节点</span>
+          <span>{t('graph.isolatedNode')}</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-cyan-400" />
-          <span>有关联（色由 id 决定）</span>
+          <span>{t('graph.connectedNode')}</span>
         </div>
-        <div className="mt-1 border-t border-slate-800 pt-2">
+        <div className="mt-1 border-t border-slate-200 pt-2 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <svg width="20" height="2" viewBox="0 0 20 2" aria-hidden="true">
               <line x1="0" y1="1" x2="20" y2="1" stroke="#64748b" strokeWidth="1.5" />
             </svg>
-            <span>已确认</span>
+            <span>{t('link.confirmedTitle')}</span>
           </div>
           <div className="mt-1.5 flex items-center gap-2">
             <svg width="20" height="2" viewBox="0 0 20 2" aria-hidden="true">
               <line x1="0" y1="1" x2="20" y2="1" stroke="#334155" strokeWidth="1" strokeDasharray="4 3" />
             </svg>
-            <span>AI 建议</span>
+            <span>{t('link.aiSuggestedTitle')}</span>
           </div>
         </div>
       </div>
