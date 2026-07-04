@@ -39,13 +39,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(BASE + path, {
       ...init,
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new ApiError(getLang() === 'en' ? `Cannot connect to backend service: ${message}` : `无法连接后端服务：${message}`)
   }
-  if (!res.ok) throw new ApiError(await parseErrorMessage(res), res.status)
+  if (!res.ok) {
+    if (res.status === 401 && !path.startsWith('/api/auth/')) {
+      window.dispatchEvent(new CustomEvent('sparkling:unauthorized'))
+    }
+    throw new ApiError(await parseErrorMessage(res), res.status)
+  }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
 }
 

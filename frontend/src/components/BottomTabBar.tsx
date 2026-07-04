@@ -1,17 +1,17 @@
 import { NavLink } from 'react-router-dom'
-import { Inbox, Network, Search, CheckSquare, Settings, type LucideIcon } from 'lucide-react'
+import { Inbox, Network, Search, CheckSquare, Settings, User, type LucideIcon } from 'lucide-react'
 import { navItems } from '../lib/navigation'
 import { useI18n } from '../lib/I18nProvider'
 
 const navIconMap: Record<string, LucideIcon> = {
-  Inbox, Network, Search, CheckSquare, Settings,
+  Inbox, Network, Search, CheckSquare, Settings, User,
 }
 
 export default function BottomTabBar() {
   const { t } = useI18n()
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-30 grid h-16 grid-cols-5 border-t border-slate-200 bg-white/95 backdrop-blur md:hidden dark:border-slate-800 dark:bg-slate-950/95">
+    <nav className="fixed inset-x-0 bottom-0 z-30 grid h-16 grid-cols-6 border-t border-slate-200 bg-white/95 backdrop-blur md:hidden dark:border-slate-800 dark:bg-slate-950/95">
       {navItems.map((item) => {
         const Icon = navIconMap[item.icon]
         const translated = t(item.labelKey)

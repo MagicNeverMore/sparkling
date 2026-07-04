@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_session
 from ..models import UserTask
+from ..time_utils import utc_isoformat
 
 router = APIRouter()
 
@@ -55,9 +56,9 @@ def _to_out(task: UserTask) -> TaskOut:
         start_date=task.start_date,
         due_date=task.due_date,
         completed=task.completed,
-        completed_at=task.completed_at.isoformat() if task.completed_at else None,
-        created_at=task.created_at.isoformat(),
-        updated_at=task.updated_at.isoformat(),
+        completed_at=utc_isoformat(task.completed_at) if task.completed_at else None,
+        created_at=utc_isoformat(task.created_at),
+        updated_at=utc_isoformat(task.updated_at),
     )
 
 

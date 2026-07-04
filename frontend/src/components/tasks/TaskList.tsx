@@ -105,6 +105,7 @@ function TaskRow({
 }
 
 export default function TaskList({ tasks, highlightDate, onToggle, onEdit, onDelete }: Props) {
+  const [incompleteCollapsed, setIncompleteCollapsed] = useState(false)
   const [completedCollapsed, setCompletedCollapsed] = useState(true)
   const { t } = useI18n()
 
@@ -122,19 +123,26 @@ export default function TaskList({ tasks, highlightDate, onToggle, onEdit, onDel
   return (
     <div className="flex flex-col">
       {/* 未完成 */}
-      <div className="mb-1 flex items-center justify-between px-2">
-        <span className="text-xs font-medium text-slate-500">{t('tasks.todo', { count: incomplete.length })}</span>
-      </div>
-      {incomplete.length === 0 ? (
-        <div className="flex min-h-20 items-center justify-center rounded-lg border border-dashed border-slate-300 text-sm text-slate-500 dark:border-slate-800 dark:text-slate-600">
-          {t('tasks.noTodo')}
-        </div>
-      ) : (
-        <div className="rounded-xl border border-slate-200 bg-white px-2 py-1 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
-          {incomplete.map((t) => (
-            <TaskRow key={t.id} task={t} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete} />
-          ))}
-        </div>
+      <button
+        type="button"
+        onClick={() => setIncompleteCollapsed(!incompleteCollapsed)}
+        className="mb-1 flex items-center gap-1 px-2 text-xs font-medium text-slate-500 hover:text-slate-700 dark:hover:text-slate-400"
+      >
+        <span className={`transition-transform ${incompleteCollapsed ? '' : 'rotate-90'}`}>▶</span>
+        {t('tasks.todo', { count: incomplete.length })}
+      </button>
+      {!incompleteCollapsed && (
+        incomplete.length === 0 ? (
+          <div className="flex min-h-20 items-center justify-center rounded-lg border border-dashed border-slate-300 text-sm text-slate-500 dark:border-slate-800 dark:text-slate-600">
+            {t('tasks.noTodo')}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-slate-200 bg-white px-2 py-1 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
+            {incomplete.map((t) => (
+              <TaskRow key={t.id} task={t} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete} />
+            ))}
+          </div>
+        )
       )}
 
       {/* 已完成 */}

@@ -137,6 +137,15 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def connect_control_db() -> sqlite3.Connection:
+    """连接固定本地 control SQLite。
+
+    control DB 不随业务数据库热切换，适合保存登录用户与数据库连接配置。
+    """
+    _ensure_control_db()
+    return _connect()
+
+
 def _ensure_control_db() -> None:
     with _connect() as conn:
         conn.execute(
@@ -147,6 +156,29 @@ def _ensure_control_db() -> None:
               db_path TEXT,
               postgresql_url TEXT,
               updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_user (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              username TEXT NOT NULL UNIQUE,
+              password_hash TEXT NOT NULL,
+              email TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_session (
+              token_hash TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES auth_user(id) ON DELETE CASCADE
             )
             """
         )

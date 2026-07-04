@@ -3,6 +3,13 @@ import type { Lang } from './I18nProvider'
 
 const localeFor = (lang: Lang) => (lang === 'zh' ? 'zh-CN' : 'en-US')
 
+export const localDateKey = (date: Date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 export const formatRelative = (iso: string, lang: Lang = 'zh') => {
   const rtf = new Intl.RelativeTimeFormat(localeFor(lang), { numeric: 'auto' })
   const diffMs = Date.now() - new Date(iso).getTime()
@@ -37,7 +44,7 @@ export const groupAtomTime = (iso: string, lang: Lang = 'zh') => {
   yesterday.setDate(today.getDate() - 1)
   if (date.toDateString() === today.toDateString()) return lang === 'zh' ? '今天' : 'Today'
   if (date.toDateString() === yesterday.toDateString()) return lang === 'zh' ? '昨天' : 'Yesterday'
-  return date.toISOString().slice(0, 10)
+  return localDateKey(date)
 }
 
 export const groupAtomsByTime = (atoms: AtomMock[], lang: Lang = 'zh') =>

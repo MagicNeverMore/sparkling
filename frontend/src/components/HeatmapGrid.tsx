@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useI18n } from '../lib/I18nProvider'
+import { localDateKey } from '../lib/time'
 
 interface Atom {
   createdAt: string
@@ -8,8 +9,7 @@ interface Atom {
 function countByDate(atoms: Atom[]) {
   const map = new Map<string, number>()
   for (const atom of atoms) {
-    // createdAt is ISO string, extract date part
-    const date = atom.createdAt.slice(0, 10)
+    const date = localDateKey(new Date(atom.createdAt))
     map.set(date, (map.get(date) ?? 0) + 1)
   }
   return map

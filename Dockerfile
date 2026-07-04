@@ -49,6 +49,7 @@ RUN mkdir -p /data
 
 ENV SPARKLING_DB_BACKEND=sqlite \
     SPARKLING_DB_PATH=/data/sparkling.db \
+    SPARKLING_CONTROL_DB_PATH=/data/control.db \
     SPARKLING_POSTGRESQL_URL= \
     SPARKLING_HOST=0.0.0.0 \
     SPARKLING_PORT=3721 \

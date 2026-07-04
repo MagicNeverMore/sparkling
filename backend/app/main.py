@@ -4,7 +4,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
@@ -13,8 +13,9 @@ from .config import config
 from .db import DatabaseConnectionError, configure_current_database, get_database_backend, get_engine, uses_postgresql
 from .logger import get_logger, setup_logging
 from .migrations import run_migrations_for_engine
-from .routers import atoms, graph, links, search, settings, tasks, ws
+from .routers import atoms, auth, graph, links, search, settings, tasks, ws
 from .runtime import start_background_worker, stop_background_worker
+from .services import auth as auth_service
 
 logger = get_logger(__name__)
 
@@ -41,6 +42,13 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Sparkling", lifespan=lifespan)
 
+AUTH_EXEMPT_API_PATHS = {
+    "/api/auth/status",
+    "/api/auth/register",
+    "/api/auth/login",
+    "/api/health",
+}
+
 
 def _database_error_message(exc: Exception) -> str:
     if isinstance(exc, DBAPIError) and exc.orig is not None:
@@ -63,6 +71,23 @@ async def database_connection_exception_handler(_request, exc: DatabaseConnectio
         content={"message": str(exc), "detail": str(exc)},
     )
 
+
+@app.middleware("http")
+async def require_auth_for_api(request: Request, call_next):  # noqa: ANN001
+    """保护业务 API；静态 SPA 资源保持可加载，由前端显示登录页。"""
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    if request.url.path.startswith("/api/"):
+        token = request.cookies.get(auth_service.SESSION_COOKIE_NAME)
+        user = auth_service.get_user_by_session(token)
+        request.state.user = user
+        if request.url.path not in AUTH_EXEMPT_API_PATHS and user is None:
+            return JSONResponse(
+                status_code=401,
+                content={"message": "Unauthorized", "detail": "Unauthorized"},
+            )
+    return await call_next(request)
+
 # 开发期允许前端 dev server 跨域访问
 app.add_middleware(
     CORSMiddleware,
@@ -72,6 +97,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(atoms.router, prefix="/api/atoms", tags=["atoms"])
 app.include_router(links.router, prefix="/api/links", tags=["links"])

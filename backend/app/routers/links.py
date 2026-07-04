@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..db import get_session
 from ..models import Settings, ThoughtAtom, ThoughtLink
 from ..services.ws_manager import manager
+from ..time_utils import utc_isoformat
 
 router = APIRouter()
 
@@ -38,7 +39,7 @@ def _to_out(link: ThoughtLink) -> LinkOut:
         source=link.source,
         user_confirmed=link.user_confirmed,
         user_ignored=link.user_ignored,
-        created_at=link.created_at.isoformat(),
+        created_at=utc_isoformat(link.created_at),
     )
 
 

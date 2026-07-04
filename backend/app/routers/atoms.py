@@ -15,6 +15,7 @@ from ..models import ThoughtAtom
 from ..services import task_queue as tq
 from ..services.embedding import delete_atom_embedding
 from ..services.ws_manager import manager
+from ..time_utils import utc_isoformat
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -48,8 +49,8 @@ def _to_out(atom: ThoughtAtom) -> AtomOut:
         content_type=atom.content_type,
         status=atom.status,
         version=atom.version,
-        created_at=atom.created_at.isoformat(),
-        updated_at=atom.updated_at.isoformat(),
+        created_at=utc_isoformat(atom.created_at),
+        updated_at=utc_isoformat(atom.updated_at),
     )
 
 
