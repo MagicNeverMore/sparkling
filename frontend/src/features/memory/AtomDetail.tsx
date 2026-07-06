@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import EmptyState from '../components/EmptyState'
-import LinkSuggest from '../components/LinkSuggest'
-import { useToast } from '../components/useToast'
-import { ConflictError } from '../lib/mock'
-import { formatDateTime } from '../lib/time'
-import { useSparklingStore } from '../lib/store'
-import { useI18n } from '../lib/I18nProvider'
+import EmptyState from '../../components/EmptyState'
+import LinkSuggest from './LinkSuggest'
+import { useToast } from '../../components/useToast'
+import { ConflictError } from '../../lib/mock'
+import { formatDateTime } from '../../lib/time'
+import { useSparklingStore } from '../../lib/store'
+import { useI18n } from '../../lib/I18nProvider'
 
 export default function AtomDetail() {
   const { lang, t } = useI18n()

@@ -67,6 +67,7 @@ export interface TrendSettingsRaw {
   schedule_days: number[]
   schedule_interval_hours: number
   schedule_time: string
+  timezone: string
   last_run_at: string | null
   next_run_at: string | null
 }

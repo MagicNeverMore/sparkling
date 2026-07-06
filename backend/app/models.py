@@ -170,5 +170,6 @@ class Settings(Base):
     trend_schedule_days_json: Mapped[str | None] = mapped_column(Text)
     trend_schedule_interval_hours: Mapped[int] = mapped_column(Integer, default=24)
     trend_schedule_time: Mapped[str] = mapped_column(String, default="09:00")
+    trend_timezone: Mapped[str] = mapped_column(String, default="UTC")
     trend_last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
     trend_next_run_at: Mapped[datetime | None] = mapped_column(DateTime)

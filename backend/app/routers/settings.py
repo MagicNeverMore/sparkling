@@ -11,16 +11,16 @@ from sqlalchemy.orm import Session
 
 from ..db import DatabaseConnectionError, get_session, switch_database
 from ..logger import get_logger
-from ..models import AtomEmbedding, Settings, TaskQueue, ThoughtAtom
+from ..models import AtomEmbedding, Settings, TaskQueue, ThoughtAtom, ThoughtLink
 from ..runtime import start_background_worker, stop_background_worker
 from ..services import task_queue as tq
-from ..services.runtime_config import build_database_config, get_database_config
-from ..services.embedding import atom_content_hash, embed_texts, test_provider
-from ..services.chat import test_chat_provider
-from ..services.settings_snapshot import snapshot_chat_settings, snapshot_embedding_settings, snapshot_trend_settings
+from ..services.settings.runtime_config import build_database_config, get_database_config
+from ..services.memory.embedding import atom_content_hash, embed_texts, test_provider
+from ..services.ai.chat import test_chat_provider
+from ..services.settings.settings_snapshot import snapshot_chat_settings, snapshot_embedding_settings, snapshot_trend_settings
 from ..services.trend.collector import calculate_next_run_at, test_trend_provider
 from ..services.trend.sources import normalize_source_config
-from ..time_utils import utc_isoformat
+from ..time_utils import DEFAULT_TIMEZONE, get_timezone, utc_isoformat
 from ..vector_store import create_vec_table, ensure_vec_table
 
 logger = get_logger(__name__)
@@ -37,6 +37,10 @@ class SettingsUpdate(BaseModel):
     chat_model: Optional[str] = None
     link_threshold_auto: Optional[float] = None
     link_threshold_suggest: Optional[float] = None
+
+
+class RebuildEmbeddingsRequest(SettingsUpdate):
+    reset_manual_links: bool = False
 
 
 class DatabaseSettingsOut(BaseModel):
@@ -65,7 +69,7 @@ class SettingsOut(BaseModel):
     embed_api_key_masked: Optional[str]   # 脱敏：仅展示后四位
     embed_model: Optional[str]
     embed_dim: Optional[int]
-    embed_dim_locked: bool                # embed_dim / embed_model 已锁定（有 embedding 数据）
+    embed_dim_locked: bool                # embed_dim 已锁定（有 embedding 数据）
     embed_model_locked: bool
     chat_base_url: Optional[str]
     chat_api_key: Optional[str]
@@ -97,6 +101,7 @@ class TrendSettingsUpdate(BaseModel):
     schedule_days: Optional[list[int]] = None
     schedule_interval_hours: Optional[int] = None
     schedule_time: Optional[str] = None
+    timezone: Optional[str] = None
 
 
 class TrendSettingsOut(BaseModel):
@@ -126,6 +131,7 @@ class TrendSettingsOut(BaseModel):
     schedule_days: list[int]
     schedule_interval_hours: int
     schedule_time: str
+    timezone: str
     last_run_at: Optional[str]
     next_run_at: Optional[str]
 
@@ -255,6 +261,7 @@ def _to_trend_out(s: Settings) -> TrendSettingsOut:
         schedule_days=_schedule_days(s),
         schedule_interval_hours=max(1, min(int(s.trend_schedule_interval_hours or 24), 24 * 30)),
         schedule_time=s.trend_schedule_time or "09:00",
+        timezone=s.trend_timezone or DEFAULT_TIMEZONE,
         last_run_at=utc_isoformat(s.trend_last_run_at) if s.trend_last_run_at else None,
         next_run_at=utc_isoformat(s.trend_next_run_at) if s.trend_next_run_at else None,
     )
@@ -359,6 +366,12 @@ async def update_trend_settings(
         s.trend_schedule_interval_hours = max(1, min(body.schedule_interval_hours, 24 * 30))
     if "schedule_time" in fields_set and body.schedule_time:
         s.trend_schedule_time = body.schedule_time
+    if "timezone" in fields_set:
+        try:
+            get_timezone(body.timezone)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        s.trend_timezone = body.timezone or DEFAULT_TIMEZONE
 
     if fields_set & {
         "schedule_enabled",
@@ -367,6 +380,7 @@ async def update_trend_settings(
         "schedule_days",
         "schedule_interval_hours",
         "schedule_time",
+        "timezone",
     }:
         s.trend_next_run_at = calculate_next_run_at(s) if s.trend_schedule_enabled else None
 
@@ -439,7 +453,7 @@ async def update_settings(
     fields_set = body.model_fields_set
     locked = _is_embed_dim_locked(session)
 
-    # embed_dim / embed_model 锁定校验
+    # embed_dim 锁定校验；embed_model 允许直接保存，旧 embedding 会在状态中标记为 stale。
     if "embed_dim" in fields_set and body.embed_dim is not None and body.embed_dim != s.embed_dim:
         if locked:
             raise HTTPException(
@@ -449,12 +463,6 @@ async def update_settings(
         # 首次设置 embed_dim，建表
         ensure_vec_table(body.embed_dim)
 
-    if "embed_model" in fields_set and body.embed_model and body.embed_model != s.embed_model:
-        if locked:
-            raise HTTPException(
-                status_code=400,
-                detail="embed_model 已锁定，切换模型请先调用 POST /api/settings/rebuild-embeddings",
-            )
     if "embed_base_url" in fields_set:
         s.embed_base_url = body.embed_base_url or None
     if "embed_api_key" in fields_set:
@@ -543,6 +551,7 @@ async def test_trend_provider_endpoint(
 @router.get("/embedding-status", response_model=EmbeddingStatusOut)
 async def get_embedding_status(session: Session = Depends(get_session)) -> EmbeddingStatusOut:
     """获取 embedding 同步状态，用于设置页展示真实队列进度。"""
+    s = _get_or_create_settings(session)
     active_atoms = (
         session.query(ThoughtAtom)
         .filter(ThoughtAtom.status != "deleted")
@@ -564,6 +573,7 @@ async def get_embedding_status(session: Session = Depends(get_session)) -> Embed
             embedding
             and embedding.atom_version == atom.version
             and embedding.content_hash == atom_content_hash(atom.content)
+            and embedding.dim == s.embed_dim
         ):
             embedded_atoms += 1
         else:
@@ -616,7 +626,7 @@ async def retry_failed_embeddings(session: Session = Depends(get_session)) -> Re
 
 @router.post("/rebuild-embeddings")
 async def rebuild_embeddings(
-    body: SettingsUpdate = SettingsUpdate(),
+    body: RebuildEmbeddingsRequest = RebuildEmbeddingsRequest(),
     session: Session = Depends(get_session),
 ) -> dict:
     """重建所有 embedding：drop + recreate vec_atoms，批量入队 embed 任务。
@@ -673,6 +683,12 @@ async def rebuild_embeddings(
         )
         session.commit()
 
+        # 新 embedding 模型下重新发现 AI 语义关系；手动确认关系默认保留。
+        link_query = session.query(ThoughtLink).filter(ThoughtLink.link_type == "semantic")
+        if not body.reset_manual_links:
+            link_query = link_query.filter(ThoughtLink.source != "user")
+        deleted_links = link_query.delete(synchronize_session=False)
+
         # 为所有未删除的 atom 入队 embed 任务
         atoms = (
             session.query(ThoughtAtom)
@@ -682,7 +698,13 @@ async def rebuild_embeddings(
         for atom in atoms:
             tq.enqueue(session, "embed", {"atom_id": atom.id, "atom_version": atom.version})
 
-        logger.info("embedding 重建已入队 %d 条，dim=%s", len(atoms), new_dim)
-        return {"queued": len(atoms), "embed_dim": new_dim}
+        logger.info(
+            "embedding 重建已入队 %d 条，dim=%s，已清理关联 %d 条，reset_manual_links=%s",
+            len(atoms),
+            new_dim,
+            deleted_links,
+            body.reset_manual_links,
+        )
+        return {"queued": len(atoms), "embed_dim": new_dim, "deleted_links": deleted_links}
     finally:
         await start_background_worker()

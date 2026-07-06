@@ -5,9 +5,9 @@ import time
 
 from openai import AsyncOpenAI
 
-from ..models import Settings
+from ...models import Settings
 from .openai_compat import normalize_base_url
-from .settings_snapshot import ChatSettingsSnapshot
+from ..settings.settings_snapshot import ChatSettingsSnapshot
 
 ChatSettings = Settings | ChatSettingsSnapshot
 

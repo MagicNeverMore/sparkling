@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
 
-from .runtime_config import connect_control_db
+from .settings.runtime_config import connect_control_db
 
 SESSION_COOKIE_NAME = "sparkling_session"
 SESSION_DAYS = 30

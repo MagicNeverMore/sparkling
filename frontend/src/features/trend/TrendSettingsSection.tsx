@@ -16,6 +16,8 @@ const weekDays = [
   { value: 7, labelKey: 'settings.weekdaySun' },
 ]
 
+const browserTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+
 export default function TrendSettingsSection() {
   const { lang, t } = useI18n()
   const { show } = useToast()
@@ -39,6 +41,7 @@ export default function TrendSettingsSection() {
   const [scheduleDays, setScheduleDays] = useState<number[]>([1, 2, 3, 4, 5, 6, 7])
   const [scheduleIntervalHours, setScheduleIntervalHours] = useState(24)
   const [scheduleTime, setScheduleTime] = useState('09:00')
+  const [timezone, setTimezone] = useState(browserTimezone)
   const [lastRunAt, setLastRunAt] = useState<string | null>(null)
   const [nextRunAt, setNextRunAt] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -66,6 +69,7 @@ export default function TrendSettingsSection() {
         setScheduleDays(s.schedule_days.length > 0 ? s.schedule_days : [1, 2, 3, 4, 5, 6, 7])
         setScheduleIntervalHours(s.schedule_interval_hours)
         setScheduleTime(s.schedule_time)
+        setTimezone(s.timezone || browserTimezone())
         setLastRunAt(s.last_run_at)
         setNextRunAt(s.next_run_at)
       })
@@ -98,6 +102,7 @@ export default function TrendSettingsSection() {
     schedule_days: scheduleDays,
     schedule_interval_hours: scheduleIntervalHours,
     schedule_time: scheduleTime,
+    timezone: browserTimezone(),
   })
 
   const applySavedSettings = (s: TrendSettingsRaw) => {
@@ -107,6 +112,8 @@ export default function TrendSettingsSection() {
     setScheduleMode(s.schedule_mode)
     setScheduleDays(s.schedule_days.length > 0 ? s.schedule_days : [1, 2, 3, 4, 5, 6, 7])
     setScheduleIntervalHours(s.schedule_interval_hours)
+    setScheduleTime(s.schedule_time)
+    setTimezone(s.timezone || browserTimezone())
     setLastRunAt(s.last_run_at)
     setNextRunAt(s.next_run_at)
   }
@@ -246,6 +253,7 @@ export default function TrendSettingsSection() {
                 <label className="text-sm text-slate-500 dark:text-slate-400">
                   {t('settings.scheduleTime')}
                   <input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-slate-950 outline-none focus:border-violet-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100" />
+                  <span className="mt-1 block text-xs text-slate-500">{t('settings.scheduleTimezone', { timezone: browserTimezone() })}</span>
                 </label>
               </div>
             ) : (
@@ -258,6 +266,7 @@ export default function TrendSettingsSection() {
           <div className="mt-3 grid gap-2 text-xs text-slate-500 md:grid-cols-2">
             <div>{t('settings.lastRun')}: {lastRunAt ? formatDateTime(lastRunAt, lang) : '-'}</div>
             <div>{t('settings.nextRun')}: {nextRunAt ? formatDateTime(nextRunAt, lang) : '-'}</div>
+            <div>{t('settings.savedTimezone')}: {timezone}</div>
           </div>
         </div>
 

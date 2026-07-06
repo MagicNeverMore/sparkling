@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { Inbox, Network, Search, CheckSquare, Settings, User, Moon, Sun, Monitor, ChevronLeft, ChevronRight, TrendingUp, type LucideIcon } from 'lucide-react'
 import ConnectionDot from './ConnectionDot'
-import HeatmapGrid from './HeatmapGrid'
+import HeatmapGrid from '../features/memory/HeatmapGrid'
 import { navItems } from '../lib/navigation'
 import { useI18n } from '../lib/I18nProvider'
 import { useTheme } from '../lib/ThemeProvider'

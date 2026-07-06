@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { LogOut } from 'lucide-react'
-import { ApiError } from '../lib/api'
-import { useAuthStore } from '../lib/authStore'
-import { useI18n } from '../lib/I18nProvider'
-import { useToast } from '../components/useToast'
+import { ApiError } from '../../lib/api'
+import { useAuthStore } from '../../lib/authStore'
+import { useI18n } from '../../lib/I18nProvider'
+import { useToast } from '../../components/useToast'
 
 export default function UserProfile() {
   const user = useAuthStore((state) => state.user)

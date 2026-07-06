@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Graph, NodeEvent, CanvasEvent } from '@antv/g6'
 import type { IElementEvent } from '@antv/g6'
-import type { AtomMock, LinkMock } from '../lib/mock'
-import { useTheme } from '../lib/ThemeProvider'
-import { useI18n } from '../lib/I18nProvider'
+import type { AtomMock, LinkMock } from '../../lib/mock'
+import { useTheme } from '../../lib/ThemeProvider'
+import { useI18n } from '../../lib/I18nProvider'
 
 interface Props {
   atoms: AtomMock[]

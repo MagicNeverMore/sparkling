@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useTaskStore, type Task, type TaskCreatePayload } from '../lib/taskStore'
-import DueSoonCards from '../components/tasks/DueSoonCards'
-import TaskCalendar from '../components/tasks/TaskCalendar'
-import TaskList from '../components/tasks/TaskList'
-import TaskModal from '../components/tasks/TaskModal'
-import { useToast } from '../components/useToast'
-import { useI18n } from '../lib/I18nProvider'
+import { useTaskStore, type Task, type TaskCreatePayload } from '../../lib/taskStore'
+import DueSoonCards from './DueSoonCards'
+import TaskCalendar from './TaskCalendar'
+import TaskList from './TaskList'
+import TaskModal from './TaskModal'
+import { useToast } from '../../components/useToast'
+import { useI18n } from '../../lib/I18nProvider'
 
 export default function Tasks() {
   const { tasks, loading, loadTasks, addTask, updateTask, toggleComplete, deleteTask } = useTaskStore()

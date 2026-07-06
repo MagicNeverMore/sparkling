@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import GraphCanvas from '../components/GraphCanvas'
-import { useSparklingStore } from '../lib/store'
-import { formatDateTime } from '../lib/time'
-import { useI18n } from '../lib/I18nProvider'
+import GraphCanvas from './GraphCanvas'
+import { useSparklingStore } from '../../lib/store'
+import { formatDateTime } from '../../lib/time'
+import { useI18n } from '../../lib/I18nProvider'
 
 export default function Graph() {
   const { lang, t } = useI18n()

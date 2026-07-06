@@ -18,7 +18,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from .services.runtime_config import (
+from .services.settings.runtime_config import (
     DatabaseRuntimeConfig,
     load_database_config,
     save_database_config,

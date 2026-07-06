@@ -17,9 +17,10 @@ from sqlalchemy.orm import Session
 from ...db import SessionLocal
 from ...logger import get_logger
 from ...models import Settings, TaskQueue, TrendItem, TrendRun
+from ...time_utils import local_to_utc_naive, utc_naive_to_local
 from .. import task_queue as tq
-from ..openai_compat import normalize_base_url
-from ..settings_snapshot import TrendSettingsSnapshot, snapshot_trend_settings
+from ..ai.openai_compat import normalize_base_url
+from ..settings.settings_snapshot import TrendSettingsSnapshot, snapshot_trend_settings
 from .sources import TrendCandidate, canonical_url, discover_candidates, normalize_source_config
 
 logger = get_logger(__name__)
@@ -233,23 +234,25 @@ def calculate_next_run_at(settings: TrendSettings, now: datetime | None = None) 
         interval_hours = _parse_interval_hours(settings.trend_schedule_interval_hours)
         return now + timedelta(hours=interval_hours)
 
+    timezone_name = getattr(settings, "trend_timezone", None)
+    local_now = utc_naive_to_local(now, timezone_name)
     days = _parse_schedule_days(settings.trend_schedule_days_json)
     for day_offset in range(0, 14):
-        candidate = (now + timedelta(days=day_offset)).replace(
+        candidate = (local_now + timedelta(days=day_offset)).replace(
             hour=hour,
             minute=minute,
             second=0,
             microsecond=0,
         )
         # datetime.weekday(): Monday=0；UI/API 保存 Monday=1 ... Sunday=7。
-        if candidate > now and candidate.weekday() + 1 in days:
-            return candidate
+        if candidate > local_now and candidate.weekday() + 1 in days:
+            return local_to_utc_naive(candidate)
 
     # 防御性兜底：配置异常时退回到明天同一时间。
-    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if candidate <= now:
+    candidate = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= local_now:
         candidate += timedelta(days=1)
-    return candidate
+    return local_to_utc_naive(candidate)
 
 
 def _parse_schedule_days(value: str | None) -> set[int]:

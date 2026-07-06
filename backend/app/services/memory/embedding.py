@@ -16,12 +16,12 @@ from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..db import SessionLocal
-from ..logger import get_logger
-from ..models import AtomEmbedding, Settings, ThoughtAtom
-from .settings_snapshot import EmbeddingSettingsSnapshot, snapshot_embedding_settings
-from .openai_compat import normalize_base_url
-from ..vector_store import (
+from ...db import SessionLocal
+from ...logger import get_logger
+from ...models import AtomEmbedding, Settings, ThoughtAtom
+from ..settings.settings_snapshot import EmbeddingSettingsSnapshot, snapshot_embedding_settings
+from ..ai.openai_compat import normalize_base_url
+from ...vector_store import (
     delete_vectors,
     get_vector,
     knn_search,

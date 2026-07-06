@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import AtomCard from '../components/AtomCard'
-import EmptyState from '../components/EmptyState'
-import { api } from '../lib/api'
-import { type SearchResultMock } from '../lib/mock'
-import { useSparklingStore } from '../lib/store'
-import { useI18n } from '../lib/I18nProvider'
+import AtomCard from './AtomCard'
+import EmptyState from '../../components/EmptyState'
+import { api } from '../../lib/api'
+import { type SearchResultMock } from '../../lib/mock'
+import { useSparklingStore } from '../../lib/store'
+import { useI18n } from '../../lib/I18nProvider'
 
 // 后端 /api/search 返回的原始类型
 interface SearchRaw {

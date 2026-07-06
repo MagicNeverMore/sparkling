@@ -13,7 +13,7 @@ from ..db import get_session
 from ..logger import get_logger
 from ..models import ThoughtAtom
 from ..services import task_queue as tq
-from ..services.embedding import delete_atom_embedding
+from ..services.memory.embedding import delete_atom_embedding
 from ..services.ws_manager import manager
 from ..time_utils import utc_isoformat
 

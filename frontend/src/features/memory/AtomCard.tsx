@@ -1,9 +1,9 @@
 import { Link } from 'react-router-dom'
 import LinkBadge from './LinkBadge'
 import SimilarityBar from './SimilarityBar'
-import type { AtomMock, LinkMock } from '../lib/mock'
-import { formatRelative } from '../lib/time'
-import { useI18n } from '../lib/I18nProvider'
+import type { AtomMock, LinkMock } from '../../lib/mock'
+import { formatRelative } from '../../lib/time'
+import { useI18n } from '../../lib/I18nProvider'
 
 interface Props {
   atom: AtomMock

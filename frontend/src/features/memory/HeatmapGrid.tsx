@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { useI18n } from '../lib/I18nProvider'
-import { localDateKey } from '../lib/time'
+import { useI18n } from '../../lib/I18nProvider'
+import { localDateKey } from '../../lib/time'
 
 interface Atom {
   createdAt: string

@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from ..db import get_session
 from ..models import Settings, ThoughtAtom
 from ..routers.atoms import AtomOut, _to_out
-from ..services.embedding import search_similar
-from ..services.settings_snapshot import snapshot_embedding_settings
+from ..services.memory.embedding import search_similar
+from ..services.settings.settings_snapshot import snapshot_embedding_settings
 
 router = APIRouter()
 

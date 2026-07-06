@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from ..models import Settings
+from ...models import Settings
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,7 @@ class TrendSettingsSnapshot:
     trend_schedule_days_json: str | None
     trend_schedule_interval_hours: int | None
     trend_schedule_time: str | None
+    trend_timezone: str | None
     trend_last_run_at: datetime | None
     trend_next_run_at: datetime | None
 
@@ -96,6 +97,7 @@ def snapshot_trend_settings(settings: Settings) -> TrendSettingsSnapshot:
         trend_schedule_days_json=settings.trend_schedule_days_json,
         trend_schedule_interval_hours=settings.trend_schedule_interval_hours,
         trend_schedule_time=settings.trend_schedule_time,
+        trend_timezone=settings.trend_timezone,
         trend_last_run_at=settings.trend_last_run_at,
         trend_next_run_at=settings.trend_next_run_at,
     )

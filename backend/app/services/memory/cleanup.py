@@ -5,9 +5,9 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from ..logger import get_logger
-from ..models import ThoughtAtom
-from ..vector_store import delete_vectors, vec_table_exists
+from ...logger import get_logger
+from ...models import ThoughtAtom
+from ...vector_store import delete_vectors, vec_table_exists
 
 logger = get_logger(__name__)
 

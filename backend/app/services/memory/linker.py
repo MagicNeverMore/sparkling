@@ -5,12 +5,12 @@ import uuid
 from datetime import datetime
 from typing import TypedDict
 
-from ..db import SessionLocal
-from ..logger import get_logger
-from ..models import Settings, ThoughtAtom, ThoughtLink
+from ...db import SessionLocal
+from ...logger import get_logger
+from ...models import Settings, ThoughtAtom, ThoughtLink
 from .embedding import knn_by_existing_embedding
-from .settings_snapshot import LinkSettingsSnapshot, snapshot_link_settings
-from .ws_manager import ConnectionManager
+from ..settings.settings_snapshot import LinkSettingsSnapshot, snapshot_link_settings
+from ..ws_manager import ConnectionManager
 
 logger = get_logger(__name__)
 LinkSettings = Settings | LinkSettingsSnapshot

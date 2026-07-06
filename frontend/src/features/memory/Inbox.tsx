@@ -1,10 +1,10 @@
-import AtomCard from '../components/AtomCard'
-import EmptyState from '../components/EmptyState'
-import QuickInput from '../components/QuickInput'
-import { useToast } from '../components/useToast'
-import { groupAtomsByTime } from '../lib/time'
-import { useSparklingStore } from '../lib/store'
-import { useI18n } from '../lib/I18nProvider'
+import AtomCard from './AtomCard'
+import EmptyState from '../../components/EmptyState'
+import QuickInput from './QuickInput'
+import { useToast } from '../../components/useToast'
+import { groupAtomsByTime } from '../../lib/time'
+import { useSparklingStore } from '../../lib/store'
+import { useI18n } from '../../lib/I18nProvider'
 
 const skeletons = ['s1', 's2', 's3']
 

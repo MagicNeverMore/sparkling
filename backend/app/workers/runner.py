@@ -10,11 +10,11 @@ from typing import Optional
 from ..db import SessionLocal
 from ..logger import get_logger
 from ..models import Settings, TaskQueue
-from ..services.cleanup import purge_expired_deleted_atoms
+from ..services.memory.cleanup import purge_expired_deleted_atoms
 from ..services import task_queue as tq
-from ..services.embedding import mark_atom_embedding_error, sync_atom_embedding
-from ..services.linker import discover_links
-from ..services.settings_snapshot import (
+from ..services.memory.embedding import mark_atom_embedding_error, sync_atom_embedding
+from ..services.memory.linker import discover_links
+from ..services.settings.settings_snapshot import (
     EmbeddingSettingsSnapshot,
     LinkSettingsSnapshot,
     snapshot_embedding_settings,

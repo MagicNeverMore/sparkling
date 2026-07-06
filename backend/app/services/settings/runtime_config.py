@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from ..config import BACKEND_DIR, config
+from ...config import BACKEND_DIR, config
 
 CONTROL_DB_PATH = Path(
     os.path.expanduser(os.getenv("SPARKLING_CONTROL_DB_PATH", str(BACKEND_DIR / "control.db")))

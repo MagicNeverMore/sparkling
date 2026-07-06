@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
-import { ApiError } from '../lib/api'
-import { useAuthStore } from '../lib/authStore'
-import { useI18n } from '../lib/I18nProvider'
+import { ApiError } from '../../lib/api'
+import { useAuthStore } from '../../lib/authStore'
+import { useI18n } from '../../lib/I18nProvider'
 
 export default function AuthPage() {
   const initialized = useAuthStore((state) => state.initialized)

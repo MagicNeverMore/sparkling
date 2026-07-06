@@ -100,6 +100,13 @@ pnpm dev
 - **不提交** `console.log` / `debugger` / 调试代码。
 - 提交前手动执行：后端 `uv run ruff check`（如已配置）；前端 `pnpm exec tsc --noEmit && pnpm build`。
 
+## 目录分组约定
+
+1. 同一功能模块达到 2 个或以上文件时，应放入对应子目录，避免继续堆在根层。
+2. 后端 `backend/app/services/` 按功能分组，例如 `memory/`、`ai/`、`settings/`、`trend/`；只有单文件模块可以暂留在 `services/` 根层。
+3. 前端业务页面和强业务组件优先放入 `frontend/src/features/<module>/`；跨功能复用 UI 才放在 `frontend/src/components/`，跨功能基础设施放在 `frontend/src/lib/`。
+4. 移动文件时必须同步更新所有 import，不保留临时兼容 re-export 层；完成后运行后端 compile/ruff 和前端 tsc/build。
+
 ## 不在 MVP 范围内
 
 - 局域网 mDNS 同步 / 多设备 sync_log（Phase 3）
@@ -125,8 +132,15 @@ AI Provider 的 `base_url` / `api_key` / 模型 / 维度由用户在前端 Setti
 1. 本地sqlite数据库始终存在，用于基础数据（例如数据库地址设置/AI provider设置）持久化
 2. 数据库支持热切换
 
+## 时间管理
+
+1. 数据库中的 `datetime` 一律按 UTC 存储；SQLite 读出的 naive datetime 也必须按 UTC 解释。
+2. API 返回用户可见时间时必须使用带时区的 ISO 字符串，例如 `2026-07-03T02:00:00Z`，统一通过 `backend/app/time_utils.py` 序列化。
+3. 前端展示时间一律使用浏览器本地时区，例如 `new Date(iso)` + `Intl.DateTimeFormat`；不要用 `toISOString().slice(0, 10)` 做本地日期展示或统计。
+4. 用户输入的“每天几点 / 每周几点”属于用户本地时间；前端提交浏览器 IANA timezone（例如 `Asia/Shanghai`），后端按该 timezone 计算后转换为 UTC 存库。
+5. 全天日期字段（例如 task `start_date` / `due_date`）是日期语义，不参与时区转换。
+
 ## AI设计
 
 * embedding相关功能使用设置的embedding模型：
 * 对话和其他功能使用设置好的Chat模型：
-

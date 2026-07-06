@@ -1,11 +1,11 @@
 import { useEffect, useState, type ComponentType } from 'react'
 import { Brain, Database, Eye, EyeOff, Info, TrendingUp } from 'lucide-react'
-import { useToast } from '../components/useToast'
-import { api, ApiError } from '../lib/api'
-import { useSparklingStore } from '../lib/store'
-import { useI18n } from '../lib/I18nProvider'
-import TrendSettingsSection from '../features/trend/TrendSettingsSection'
-import type { TrendSettingsRaw } from '../features/trend/types'
+import { useToast } from '../../components/useToast'
+import { api, ApiError } from '../../lib/api'
+import { useSparklingStore } from '../../lib/store'
+import { useI18n } from '../../lib/I18nProvider'
+import TrendSettingsSection from '../trend/TrendSettingsSection'
+import type { TrendSettingsRaw } from '../trend/types'
 
 const dims = [384, 512, 768, 1024, 1536, 2048, 2560, 3072, 4096]
 
@@ -96,6 +96,7 @@ export default function Settings() {
   const [rebuilding, setRebuilding] = useState(false)
   const [dimEditing, setDimEditing] = useState(false)
   const [savedEmbedDim, setSavedEmbedDim] = useState(1536)
+  const [savedEmbedModel, setSavedEmbedModel] = useState('text-embedding-3-small')
   const [retryingEmbeddings, setRetryingEmbeddings] = useState(false)
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatusRaw | null>(null)
 
@@ -124,6 +125,8 @@ export default function Settings() {
         setEmbedDim(s.embed_dim ?? 1536)
         setEmbedDimLocked(s.embed_dim_locked)
         setEmbedModelLocked(s.embed_model_locked)
+        setSavedEmbedModel(s.embed_model ?? '')
+        setSavedEmbedDim(s.embed_dim ?? 1536)
         setChatBaseUrl(s.chat_base_url ?? '')
         setChatApiKey(s.chat_api_key ?? '')
         setChatApiKeyDirty(false)
@@ -222,15 +225,24 @@ export default function Settings() {
   })
 
   const saveEmbedSettings = async () => {
+    if (embedDimLocked && embedDim !== savedEmbedDim) {
+      chooseManualLinkResetAndRebuild()
+      setDimEditing(false)
+      return
+    }
+    const modelChanged = embedModel !== savedEmbedModel
     try {
       const s = await api.put<SettingsRaw>('/api/settings', buildEmbedSettingsPayload())
       if (s.embed_dim) setEmbedDim(s.embed_dim)
       setEmbedDimLocked(s.embed_dim_locked)
       setEmbedModelLocked(s.embed_model_locked)
+      setSavedEmbedModel(s.embed_model ?? '')
+      setSavedEmbedDim(s.embed_dim ?? embedDim)
+      setDimEditing(false)
       setEmbedApiKey(s.embed_api_key ?? '')
       setEmbedApiKeyDirty(false)
       setEmbedApiKeyMasked(s.embed_api_key_masked)
-      show(t('settings.embedSaved'), 'success')
+      show(modelChanged ? t('settings.modelSavedRebuildSuggested') : t('settings.embedSaved'), modelChanged ? 'warning' : 'success')
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
       show(message, 'error')
@@ -333,22 +345,25 @@ export default function Settings() {
     }
   }
 
-  const startRebuild = async () => {
-    try {
-      await api.put<SettingsRaw>('/api/settings', buildEmbedSettingsPayload())
-    } catch {
-      // 保存失败也继续
-    }
+  const startRebuild = async (resetManualLinks: boolean) => {
     try {
       await api.post('/api/settings/rebuild-embeddings', {
-        embed_dim: embedDim,
+        ...buildEmbedSettingsPayload(),
+        reset_manual_links: resetManualLinks,
       })
       setRebuilding(true)
+      setSavedEmbedDim(embedDim)
+      setSavedEmbedModel(embedModel)
       loadEmbeddingStatus()
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
       show(t('settings.rebuildFailed', { message }), 'error')
     }
+  }
+
+  const chooseManualLinkResetAndRebuild = () => {
+    const resetManualLinks = window.confirm(t('settings.resetManualLinksConfirm'))
+    void startRebuild(resetManualLinks)
   }
 
   const retryFailedEmbeddings = async () => {
@@ -546,13 +561,13 @@ export default function Settings() {
                   <datalist id="embed-dim-presets">
                     {dims.map((dim) => <option key={dim} value={dim} />)}
                   </datalist>
-                  {embedDimLocked && !dimEditing && (
+                  {(embedDimLocked || embedModelLocked) && !dimEditing && (
                     <button
                       type="button"
-                      onClick={() => { setDimEditing(true); setSavedEmbedDim(embedDim) }}
+                      onClick={() => { setDimEditing(true); setSavedEmbedDim(embedDim); setSavedEmbedModel(embedModel) }}
                       className="mt-2 rounded-md border border-amber-500/50 px-3 py-1.5 text-xs text-amber-600 transition hover:bg-amber-50 hover:text-amber-700 dark:text-amber-400 dark:hover:bg-amber-500/10 dark:hover:text-amber-300"
                     >
-                      {t('settings.changeDim')}
+                      {t('settings.changeDimOrModel')}
                     </button>
                   )}
                   {dimEditing && (
@@ -560,20 +575,19 @@ export default function Settings() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (embedDim !== savedEmbedDim) {
-                            void startRebuild()
-                            setDimEditing(false)
+                          if (embedDim !== savedEmbedDim || embedModel !== savedEmbedModel) {
+                            void saveEmbedSettings()
                           } else {
-                            show(t('settings.dimUnchanged'), 'info')
+                            show(t('settings.dimModelUnchanged'), 'info')
                           }
                         }}
-                        className="rounded-md bg-rose-500 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-rose-400"
+                        className="rounded-md bg-violet-500 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-violet-400"
                       >
-                        {t('settings.confirmRebuild')}
+                        {t('common.save')}
                       </button>
                       <button
                         type="button"
-                        onClick={() => { setEmbedDim(savedEmbedDim); setDimEditing(false) }}
+                        onClick={() => { setEmbedDim(savedEmbedDim); setEmbedModel(savedEmbedModel); setDimEditing(false) }}
                         className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
                       >
                         {t('common.cancel')}
@@ -615,14 +629,24 @@ export default function Settings() {
                     </div>
                   )}
                   <div className="mt-3 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={retryFailedEmbeddings}
-                      disabled={retryingEmbeddings || embeddingStatus.failed === 0}
-                      className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:disabled:border-slate-800 dark:disabled:text-slate-600"
-                    >
-                      {retryingEmbeddings ? t('settings.retrying') : t('settings.retryFailedTasks')}
-                    </button>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={chooseManualLinkResetAndRebuild}
+                        disabled={rebuilding}
+                        className="rounded-md border border-amber-500/50 px-3 py-1.5 text-xs text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-amber-300 dark:hover:bg-amber-500/10"
+                      >
+                        {rebuilding ? t('settings.rebuilding') : t('settings.rebuildEmbeddings')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={retryFailedEmbeddings}
+                        disabled={retryingEmbeddings || embeddingStatus.failed === 0}
+                        className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:disabled:border-slate-800 dark:disabled:text-slate-600"
+                      >
+                        {retryingEmbeddings ? t('settings.retrying') : t('settings.retryFailedTasks')}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
