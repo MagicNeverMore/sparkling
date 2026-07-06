@@ -28,6 +28,7 @@ export default function AtomDetail() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDraft(atom?.content ?? '')
   }, [atom?.content])
 

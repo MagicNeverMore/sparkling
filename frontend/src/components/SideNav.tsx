@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Inbox, Network, Search, CheckSquare, Settings, User, Moon, Sun, Monitor, ChevronLeft, ChevronRight, type LucideIcon } from 'lucide-react'
+import { Inbox, Network, Search, CheckSquare, Settings, User, Moon, Sun, Monitor, ChevronLeft, ChevronRight, TrendingUp, type LucideIcon } from 'lucide-react'
 import ConnectionDot from './ConnectionDot'
 import HeatmapGrid from './HeatmapGrid'
 import { navItems } from '../lib/navigation'
@@ -15,7 +15,7 @@ interface Props {
 }
 
 const navIconMap: Record<string, LucideIcon> = {
-  Inbox, Network, Search, CheckSquare, Settings, User,
+  Inbox, Network, Search, TrendingUp, CheckSquare, Settings, User,
 }
 
 const themeIcons: Record<string, LucideIcon> = {

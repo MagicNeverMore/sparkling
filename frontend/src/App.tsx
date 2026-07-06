@@ -6,6 +6,7 @@ import Graph from './pages/Graph'
 import Search from './pages/Search'
 import Settings from './pages/Settings'
 import Tasks from './pages/Tasks'
+import TrendPage from './features/trend/TrendPage'
 import AtomDetail from './pages/AtomDetail'
 import AuthPage from './pages/Auth'
 import UserProfile from './pages/UserProfile'
@@ -27,6 +28,7 @@ function AppRoutes() {
         <Route path="/inbox" element={<Inbox />} />
         <Route path="/graph" element={<Graph />} />
         <Route path="/search" element={<Search />} />
+        <Route path="/trends" element={<TrendPage />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/user" element={<UserProfile />} />

@@ -13,6 +13,7 @@ from ..services.cleanup import purge_expired_deleted_atoms
 from ..services import task_queue as tq
 from ..services.embedding import mark_atom_embedding_error, sync_atom_embedding
 from ..services.linker import discover_links
+from ..services.trend.collector import collect_trends, maybe_enqueue_due_trend_run
 from ..services.ws_manager import manager
 
 logger = get_logger(__name__)
@@ -21,6 +22,7 @@ MAX_ATTEMPTS = 3
 # 无新任务时的兜底轮询间隔（秒），防止 wakeup event 丢失
 POLL_INTERVAL = 30.0
 CLEANUP_INTERVAL = timedelta(hours=24)
+TREND_SCHEDULER_INTERVAL = timedelta(minutes=1)
 
 
 async def _handle_embed(session, payload: dict, settings: Settings) -> None:
@@ -57,9 +59,24 @@ async def _handle_link_discover(session, payload: dict, settings: Settings) -> N
     logger.info("link_discover 完成，atom_id=%s，发现关联 %d 条", atom_id, len(links))
 
 
+async def _handle_trend_collect(session, payload: dict, _settings: Settings | None) -> None:
+    """处理 Trend 采集任务：source discovery → WebFetch → LLM 评分 → 入库。"""
+    run_id = payload.get("run_id")
+    if not run_id:
+        raise ValueError("trend_collect 任务缺少 run_id")
+    result = await collect_trends(session, run_id)
+    logger.info(
+        "trend_collect 完成，run_id=%s，候选 %d 条，入库 %d 条",
+        run_id,
+        result["candidate_count"],
+        result["saved_count"],
+    )
+
+
 _HANDLERS = {
     "embed": _handle_embed,
     "link_discover": _handle_link_discover,
+    "trend_collect": _handle_trend_collect,
 }
 
 
@@ -74,6 +91,7 @@ async def _worker_loop() -> None:
     event = tq.get_wakeup_event()
     logger.info("Sparkling worker 已启动")
     last_cleanup_at: datetime | None = None
+    last_trend_schedule_check_at: datetime | None = None
 
     while True:
         now = datetime.utcnow()
@@ -81,6 +99,15 @@ async def _worker_loop() -> None:
             with SessionLocal() as session:
                 purge_expired_deleted_atoms(session)
             last_cleanup_at = now
+
+        if last_trend_schedule_check_at is None or now - last_trend_schedule_check_at >= TREND_SCHEDULER_INTERVAL:
+            with SessionLocal() as session:
+                settings = session.get(Settings, 1)
+                if settings is not None:
+                    run = maybe_enqueue_due_trend_run(session, settings, now)
+                    if run is not None:
+                        logger.info("Trend 定时任务已入队，run_id=%s", run.id)
+            last_trend_schedule_check_at = now
 
         try:
             await asyncio.wait_for(event.wait(), timeout=POLL_INTERVAL)
@@ -104,7 +131,9 @@ async def _worker_loop() -> None:
 
                 # 每次任务都重新读 settings，支持热更新 AI provider 配置
                 settings = session.get(Settings, 1)
-                if settings is None or not settings.embed_model or not settings.embed_dim:
+                if task.task_type in {"embed", "link_discover"} and (
+                    settings is None or not settings.embed_model or not settings.embed_dim
+                ):
                     # Settings 尚未配置，回退到 pending，不累计重试次数
                     task.status = "pending"
                     task.attempts -= 1

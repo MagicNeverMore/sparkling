@@ -33,7 +33,8 @@ function resolveTheme(theme: Theme): 'dark' | 'light' {
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(getStoredTheme)
-  const [resolved, setResolved] = useState<'dark' | 'light'>(() => resolveTheme(getStoredTheme()))
+  const [systemTheme, setSystemTheme] = useState<'dark' | 'light'>(() => resolveTheme('system'))
+  const resolved = theme === 'system' ? systemTheme : theme
 
   const setTheme = (t: Theme) => {
     setThemeState(t)
@@ -41,33 +42,24 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    const r = resolveTheme(theme)
-    setResolved(r)
     const root = document.documentElement
-    root.style.colorScheme = r
-    if (r === 'dark') {
+    root.style.colorScheme = resolved
+    if (resolved === 'dark') {
       root.classList.add('dark')
     } else {
       root.classList.remove('dark')
     }
-  }, [theme])
+  }, [resolved])
 
   // Listen for system preference changes when in 'system' mode
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
     const handler = () => {
-      if (theme === 'system') {
-        const r = resolveTheme('system')
-        setResolved(r)
-        const root = document.documentElement
-        root.style.colorScheme = r
-        if (r === 'dark') root.classList.add('dark')
-        else root.classList.remove('dark')
-      }
+      setSystemTheme(resolveTheme('system'))
     }
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
-  }, [theme])
+  }, [])
 
   return (
     <ThemeContext.Provider value={{ theme, setTheme, resolved }}>
@@ -76,6 +68,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useTheme() {
   return useContext(ThemeContext)
 }

@@ -103,6 +103,44 @@ class UserTask(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class TrendItem(Base):
+    """可作为自媒体内容选题的热点内容。"""
+
+    __tablename__ = "trend_item"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str | None] = mapped_column(String)
+    score: Mapped[float] = mapped_column(Float, default=0)
+    scoring_reason: Mapped[str | None] = mapped_column(Text)
+    core_insight: Mapped[str | None] = mapped_column(Text)
+    content: Mapped[str | None] = mapped_column(Text)
+    tags_json: Mapped[str | None] = mapped_column(Text)
+    resources_json: Mapped[str | None] = mapped_column(Text)
+    fingerprint: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(default=_now)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class TrendRun(Base):
+    """Trend 采集运行记录，用于页面展示和失败排查。"""
+
+    __tablename__ = "trend_run"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    trigger: Mapped[str] = mapped_column(String, default="manual")  # manual|scheduled
+    status: Mapped[str] = mapped_column(String, default="pending")  # pending|running|done|failed
+    error: Mapped[str | None] = mapped_column(Text)
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    saved_count: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 class Settings(Base):
     """单行配置表。"""
 
@@ -119,3 +157,18 @@ class Settings(Base):
     chat_model: Mapped[str | None] = mapped_column(String)
     link_threshold_auto: Mapped[float] = mapped_column(Float, default=0.85)
     link_threshold_suggest: Mapped[float] = mapped_column(Float, default=0.70)
+    trend_brand_prompt: Mapped[str | None] = mapped_column(Text)
+    trend_base_url: Mapped[str | None] = mapped_column(String)
+    trend_api_key: Mapped[str | None] = mapped_column(String)
+    trend_model: Mapped[str | None] = mapped_column(String)
+    trend_source_config: Mapped[str | None] = mapped_column(Text)
+    trend_score_threshold: Mapped[float] = mapped_column(Float, default=70)
+    trend_result_limit: Mapped[int] = mapped_column(Integer, default=20)
+    trend_schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    trend_schedule_frequency: Mapped[str] = mapped_column(String, default="daily")
+    trend_schedule_mode: Mapped[str] = mapped_column(String, default="weekly")
+    trend_schedule_days_json: Mapped[str | None] = mapped_column(Text)
+    trend_schedule_interval_hours: Mapped[int] = mapped_column(Integer, default=24)
+    trend_schedule_time: Mapped[str] = mapped_column(String, default="09:00")
+    trend_last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
+    trend_next_run_at: Mapped[datetime | None] = mapped_column(DateTime)

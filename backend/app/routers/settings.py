@@ -1,6 +1,7 @@
 """Settings 路由：AI provider 配置（Embedding / Chat 分离）、连通性测试、embedding 重建。"""
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,6 +17,9 @@ from ..services import task_queue as tq
 from ..services.runtime_config import build_database_config, get_database_config
 from ..services.embedding import atom_content_hash, embed_texts, test_provider
 from ..services.chat import test_chat_provider
+from ..services.trend.collector import calculate_next_run_at, test_trend_provider
+from ..services.trend.sources import normalize_source_config
+from ..time_utils import utc_isoformat
 from ..vector_store import create_vec_table, ensure_vec_table
 
 logger = get_logger(__name__)
@@ -68,6 +72,61 @@ class SettingsOut(BaseModel):
     chat_model: Optional[str]
     link_threshold_auto: float
     link_threshold_suggest: float
+
+
+class TrendSettingsUpdate(BaseModel):
+    brand_prompt: Optional[str] = None
+    llm_base_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    llm_model: Optional[str] = None
+    reddit_enabled: Optional[bool] = None
+    github_enabled: Optional[bool] = None
+    hackernews_enabled: Optional[bool] = None
+    google_enabled: Optional[bool] = None
+    reddit_limit: Optional[int] = None
+    github_limit: Optional[int] = None
+    hackernews_limit: Optional[int] = None
+    google_limit: Optional[int] = None
+    github_token: Optional[str] = None
+    score_threshold: Optional[float] = None
+    result_limit: Optional[int] = None
+    schedule_enabled: Optional[bool] = None
+    schedule_frequency: Optional[str] = None
+    schedule_mode: Optional[str] = None
+    schedule_days: Optional[list[int]] = None
+    schedule_interval_hours: Optional[int] = None
+    schedule_time: Optional[str] = None
+
+
+class TrendSettingsOut(BaseModel):
+    brand_prompt: str
+    llm_base_url: Optional[str]
+    llm_api_key: Optional[str]
+    llm_api_key_masked: Optional[str]
+    llm_model: Optional[str]
+    effective_llm_base_url: Optional[str]
+    effective_llm_model: Optional[str]
+    uses_chat_fallback: bool
+    reddit_enabled: bool
+    github_enabled: bool
+    hackernews_enabled: bool
+    google_enabled: bool
+    reddit_limit: int
+    github_limit: int
+    hackernews_limit: int
+    google_limit: int
+    github_token: Optional[str]
+    github_token_masked: Optional[str]
+    score_threshold: float
+    result_limit: int
+    schedule_enabled: bool
+    schedule_frequency: str
+    schedule_mode: str
+    schedule_days: list[int]
+    schedule_interval_hours: int
+    schedule_time: str
+    last_run_at: Optional[str]
+    next_run_at: Optional[str]
 
 
 class TestProviderResult(BaseModel):
@@ -134,6 +193,72 @@ def _to_out(s: Settings, session: Session) -> SettingsOut:
     )
 
 
+def _source_config(s: Settings) -> dict:
+    try:
+        raw = json.loads(s.trend_source_config or "{}")
+    except json.JSONDecodeError:
+        raw = {}
+    return normalize_source_config(raw)
+
+
+def _write_source_config(s: Settings, config: dict) -> None:
+    s.trend_source_config = json.dumps(normalize_source_config(config), ensure_ascii=False)
+
+
+def _schedule_days(s: Settings) -> list[int]:
+    try:
+        raw = json.loads(s.trend_schedule_days_json or "[]")
+    except json.JSONDecodeError:
+        raw = []
+    if not isinstance(raw, list):
+        raw = []
+    days = sorted({day for day in raw if isinstance(day, int) and 1 <= day <= 7})
+    return days or [1, 2, 3, 4, 5, 6, 7]
+
+
+def _write_schedule_days(s: Settings, days: list[int] | None) -> None:
+    if days is None:
+        return
+    valid = sorted({day for day in days if isinstance(day, int) and 1 <= day <= 7})
+    s.trend_schedule_days_json = json.dumps(valid or [1, 2, 3, 4, 5, 6, 7])
+
+
+def _to_trend_out(s: Settings) -> TrendSettingsOut:
+    source_config = _source_config(s)
+    effective_base_url = s.trend_base_url or s.chat_base_url
+    effective_model = s.trend_model or s.chat_model
+    return TrendSettingsOut(
+        brand_prompt=s.trend_brand_prompt or "",
+        llm_base_url=s.trend_base_url,
+        llm_api_key=s.trend_api_key,
+        llm_api_key_masked=_mask_key(s.trend_api_key),
+        llm_model=s.trend_model,
+        effective_llm_base_url=effective_base_url,
+        effective_llm_model=effective_model,
+        uses_chat_fallback=not bool(s.trend_base_url or s.trend_api_key or s.trend_model),
+        reddit_enabled=bool(source_config["reddit"]["enabled"]),
+        github_enabled=bool(source_config["github"]["enabled"]),
+        hackernews_enabled=bool(source_config["hackernews"]["enabled"]),
+        google_enabled=bool(source_config["google"]["enabled"]),
+        reddit_limit=int(source_config["reddit"]["limit"]),
+        github_limit=int(source_config["github"]["limit"]),
+        hackernews_limit=int(source_config["hackernews"]["limit"]),
+        google_limit=int(source_config["google"]["limit"]),
+        github_token=source_config["github"].get("token"),
+        github_token_masked=_mask_key(source_config["github"].get("token")),
+        score_threshold=s.trend_score_threshold if s.trend_score_threshold is not None else 70,
+        result_limit=s.trend_result_limit if s.trend_result_limit is not None else 20,
+        schedule_enabled=bool(s.trend_schedule_enabled),
+        schedule_frequency=s.trend_schedule_frequency or "daily",
+        schedule_mode=s.trend_schedule_mode or "weekly",
+        schedule_days=_schedule_days(s),
+        schedule_interval_hours=max(1, min(int(s.trend_schedule_interval_hours or 24), 24 * 30)),
+        schedule_time=s.trend_schedule_time or "09:00",
+        last_run_at=utc_isoformat(s.trend_last_run_at) if s.trend_last_run_at else None,
+        next_run_at=utc_isoformat(s.trend_next_run_at) if s.trend_next_run_at else None,
+    )
+
+
 def _enqueue_link_discover_for_active_atoms(session: Session) -> int:
     atoms = (
         session.query(ThoughtAtom)
@@ -150,6 +275,103 @@ async def get_settings(session: Session = Depends(get_session)) -> SettingsOut:
     """获取当前 settings。单用户本地应用允许前端取回已保存的 API key。"""
     s = _get_or_create_settings(session)
     return _to_out(s, session)
+
+
+@router.get("/trend", response_model=TrendSettingsOut)
+async def get_trend_settings(session: Session = Depends(get_session)) -> TrendSettingsOut:
+    """获取 Trend Settings。"""
+    s = _get_or_create_settings(session)
+    return _to_trend_out(s)
+
+
+@router.put("/trend", response_model=TrendSettingsOut)
+async def update_trend_settings(
+    body: TrendSettingsUpdate,
+    session: Session = Depends(get_session),
+) -> TrendSettingsOut:
+    """更新 Trend Settings。
+
+    Trend LLM provider 为空时默认复用 Chat provider。
+    """
+    s = _get_or_create_settings(session)
+    fields_set = body.model_fields_set
+    source_config = _source_config(s)
+
+    if "brand_prompt" in fields_set:
+        s.trend_brand_prompt = body.brand_prompt or None
+    if "llm_base_url" in fields_set:
+        s.trend_base_url = body.llm_base_url or None
+    if "llm_api_key" in fields_set:
+        s.trend_api_key = body.llm_api_key or None
+    if "llm_model" in fields_set:
+        s.trend_model = body.llm_model or None
+
+    source_fields = {
+        "reddit_enabled",
+        "github_enabled",
+        "hackernews_enabled",
+        "google_enabled",
+        "reddit_limit",
+        "github_limit",
+        "hackernews_limit",
+        "google_limit",
+        "github_token",
+    }
+    if fields_set & source_fields:
+        for key, source_name in [
+            ("reddit_enabled", "reddit"),
+            ("github_enabled", "github"),
+            ("hackernews_enabled", "hackernews"),
+            ("google_enabled", "google"),
+        ]:
+            if key in fields_set:
+                source_config[source_name]["enabled"] = bool(getattr(body, key))
+        for key, source_name in [
+            ("reddit_limit", "reddit"),
+            ("github_limit", "github"),
+            ("hackernews_limit", "hackernews"),
+            ("google_limit", "google"),
+        ]:
+            if key in fields_set and getattr(body, key) is not None:
+                source_config[source_name]["limit"] = getattr(body, key)
+        if "github_token" in fields_set:
+            source_config["github"]["token"] = body.github_token or None
+        _write_source_config(s, source_config)
+
+    if "score_threshold" in fields_set and body.score_threshold is not None:
+        s.trend_score_threshold = max(0, min(body.score_threshold, 100))
+    if "result_limit" in fields_set and body.result_limit is not None:
+        s.trend_result_limit = max(1, min(body.result_limit, 100))
+    if "schedule_enabled" in fields_set and body.schedule_enabled is not None:
+        s.trend_schedule_enabled = body.schedule_enabled
+    if "schedule_frequency" in fields_set and body.schedule_frequency:
+        if body.schedule_frequency not in {"hourly", "daily", "weekly"}:
+            raise HTTPException(status_code=400, detail="schedule_frequency must be hourly, daily, or weekly")
+        s.trend_schedule_frequency = body.schedule_frequency
+    if "schedule_mode" in fields_set and body.schedule_mode:
+        if body.schedule_mode not in {"weekly", "interval"}:
+            raise HTTPException(status_code=400, detail="schedule_mode must be weekly or interval")
+        s.trend_schedule_mode = body.schedule_mode
+    if "schedule_days" in fields_set:
+        _write_schedule_days(s, body.schedule_days)
+    if "schedule_interval_hours" in fields_set and body.schedule_interval_hours is not None:
+        s.trend_schedule_interval_hours = max(1, min(body.schedule_interval_hours, 24 * 30))
+    if "schedule_time" in fields_set and body.schedule_time:
+        s.trend_schedule_time = body.schedule_time
+
+    if fields_set & {
+        "schedule_enabled",
+        "schedule_frequency",
+        "schedule_mode",
+        "schedule_days",
+        "schedule_interval_hours",
+        "schedule_time",
+    }:
+        s.trend_next_run_at = calculate_next_run_at(s) if s.trend_schedule_enabled else None
+
+    session.commit()
+    session.refresh(s)
+    return _to_trend_out(s)
 
 
 @router.get("/database", response_model=DatabaseSettingsOut)
@@ -294,6 +516,20 @@ async def test_chat_provider_endpoint(
         logger.info("chat provider 测试成功 latency=%.1fms", latency_ms)
     else:
         logger.warning("chat provider 测试失败: %s", error)
+    return TestProviderResult(ok=ok, latency_ms=latency_ms, error=error)
+
+
+@router.post("/test-trend-provider", response_model=TestProviderResult)
+async def test_trend_provider_endpoint(
+    session: Session = Depends(get_session),
+) -> TestProviderResult:
+    """测试 Trend LLM provider；未单独配置时复用 Chat provider。"""
+    s = _get_or_create_settings(session)
+    ok, latency_ms, error = await test_trend_provider(s)
+    if ok:
+        logger.info("trend provider 测试成功 latency=%.1fms", latency_ms)
+    else:
+        logger.warning("trend provider 测试失败: %s", error)
     return TestProviderResult(ok=ok, latency_ms=latency_ms, error=error)
 
 
