@@ -14,10 +14,12 @@ import httpx
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
+from ...db import SessionLocal
 from ...logger import get_logger
 from ...models import Settings, TaskQueue, TrendItem, TrendRun
 from .. import task_queue as tq
 from ..openai_compat import normalize_base_url
+from ..settings_snapshot import TrendSettingsSnapshot, snapshot_trend_settings
 from .sources import TrendCandidate, canonical_url, discover_candidates, normalize_source_config
 
 logger = get_logger(__name__)
@@ -29,6 +31,7 @@ MAX_EVIDENCE_ITEMS = 6
 MAX_FOLLOW_UP_ROUNDS = 2
 TREND_PROVIDER_TEST_TIMEOUT_SECONDS = 20.0
 TREND_LLM_TIMEOUT_SECONDS = 120.0
+TrendSettings = Settings | TrendSettingsSnapshot
 
 
 @dataclass
@@ -69,7 +72,7 @@ def _now() -> datetime:
     return datetime.utcnow()
 
 
-def _load_source_config(settings: Settings) -> dict[str, dict[str, Any]]:
+def _load_source_config(settings: TrendSettings) -> dict[str, dict[str, Any]]:
     try:
         raw = json.loads(settings.trend_source_config or "{}")
     except json.JSONDecodeError:
@@ -77,7 +80,7 @@ def _load_source_config(settings: Settings) -> dict[str, dict[str, Any]]:
     return normalize_source_config(raw)
 
 
-def _resolve_trend_provider(settings: Settings) -> tuple[str | None, str | None, str | None]:
+def _resolve_trend_provider(settings: TrendSettings) -> tuple[str | None, str | None, str | None]:
     """Trend provider 默认复用 Chat provider，单独填写后覆盖。"""
     if settings.trend_base_url:
         return (
@@ -93,7 +96,7 @@ def _resolve_trend_provider(settings: Settings) -> tuple[str | None, str | None,
 
 
 def _get_trend_client(
-    settings: Settings,
+    settings: TrendSettings,
     *,
     timeout_seconds: float = TREND_LLM_TIMEOUT_SECONDS,
     max_retries: int = 1,
@@ -148,7 +151,7 @@ async def _create_json_chat_completion(
         return await client.chat.completions.create(**kwargs)
 
 
-async def test_trend_provider(settings: Settings) -> tuple[bool, float, str | None]:
+async def test_trend_provider(settings: TrendSettings) -> tuple[bool, float, str | None]:
     start = datetime.utcnow()
     client: AsyncOpenAI | None = None
     try:
@@ -222,7 +225,7 @@ def maybe_enqueue_due_trend_run(session: Session, settings: Settings, now: datet
     return enqueue_trend_run(session, "scheduled")
 
 
-def calculate_next_run_at(settings: Settings, now: datetime | None = None) -> datetime:
+def calculate_next_run_at(settings: TrendSettings, now: datetime | None = None) -> datetime:
     now = now or _now()
     hour, minute = _parse_schedule_time(settings.trend_schedule_time)
     mode = settings.trend_schedule_mode or "weekly"
@@ -280,32 +283,42 @@ def _parse_schedule_time(value: str | None) -> tuple[int, int]:
     return hour, minute
 
 
-async def collect_trends(session: Session, run_id: str) -> dict[str, int]:
-    run = session.get(TrendRun, run_id)
-    if run is None:
-        raise ValueError(f"Trend run not found: {run_id}")
-    settings = session.get(Settings, 1)
-    if settings is None:
-        settings = Settings(id=1)
-        session.add(settings)
-        session.commit()
-        session.refresh(settings)
-
-    run.status = "running"
-    run.started_at = _now()
-    run.updated_at = _now()
-    run.error = None
-    session.commit()
-
+async def collect_trends(run_id: str) -> dict[str, int]:
     try:
-        source_config = _load_source_config(settings)
-        query = (settings.trend_brand_prompt or DEFAULT_TREND_PROMPT).strip()
-        threshold = settings.trend_score_threshold if settings.trend_score_threshold is not None else 70
-        result_limit = max(1, min(int(settings.trend_result_limit or 20), 100))
+        with SessionLocal() as session:
+            run = session.get(TrendRun, run_id)
+            if run is None:
+                raise ValueError(f"Trend run not found: {run_id}")
+            settings = session.get(Settings, 1)
+            if settings is None:
+                settings = Settings(id=1)
+                session.add(settings)
+                session.commit()
+                session.refresh(settings)
+
+            run.status = "running"
+            run.started_at = _now()
+            run.updated_at = _now()
+            run.error = None
+            settings_snapshot = snapshot_trend_settings(settings)
+            source_config = _load_source_config(settings_snapshot)
+            query = (settings_snapshot.trend_brand_prompt or DEFAULT_TREND_PROMPT).strip()
+            threshold = (
+                settings_snapshot.trend_score_threshold
+                if settings_snapshot.trend_score_threshold is not None
+                else 70
+            )
+            result_limit = max(1, min(int(settings_snapshot.trend_result_limit or 20), 100))
+            session.commit()
 
         candidates = await discover_candidates(query, source_config)
-        run.candidate_count = len(candidates)
-        session.commit()
+        with SessionLocal() as session:
+            run = session.get(TrendRun, run_id)
+            if run is None:
+                raise ValueError(f"Trend run not found: {run_id}")
+            run.candidate_count = len(candidates)
+            run.updated_at = _now()
+            session.commit()
 
         saved = 0
         seen_evidence_urls: set[str] = set()
@@ -314,7 +327,13 @@ async def collect_trends(session: Session, run_id: str) -> dict[str, int]:
                 break
             evidence = [await _build_evidence(candidate)]
             seen_evidence_urls.add(canonical_url(candidate.url))
-            result = await _score_with_follow_ups(settings, query, evidence, source_config, seen_evidence_urls)
+            result = await _score_with_follow_ups(
+                settings_snapshot,
+                query,
+                evidence,
+                source_config,
+                seen_evidence_urls,
+            )
             if _score_value(result.get("score")) < threshold:
                 continue
 
@@ -322,31 +341,41 @@ async def collect_trends(session: Session, run_id: str) -> dict[str, int]:
             if not resources:
                 logger.info("Trend 候选缺少可信资源，已跳过: %s", candidate.url)
                 continue
-            _upsert_trend_item(session, result, resources)
+            with SessionLocal() as session:
+                _upsert_trend_item(session, result, resources)
             saved += 1
 
         finished = _now()
-        run.status = "done"
-        run.saved_count = saved
-        run.finished_at = finished
-        run.updated_at = finished
-        settings.trend_last_run_at = finished
-        if settings.trend_schedule_enabled:
-            settings.trend_next_run_at = calculate_next_run_at(settings, finished)
-        session.commit()
-        return {"candidate_count": run.candidate_count, "saved_count": saved}
+        with SessionLocal() as session:
+            run = session.get(TrendRun, run_id)
+            if run is None:
+                raise ValueError(f"Trend run not found: {run_id}")
+            settings = session.get(Settings, 1)
+            run.status = "done"
+            run.saved_count = saved
+            run.finished_at = finished
+            run.updated_at = finished
+            if settings is not None:
+                settings.trend_last_run_at = finished
+                if settings.trend_schedule_enabled:
+                    settings.trend_next_run_at = calculate_next_run_at(settings, finished)
+            session.commit()
+            candidate_count = run.candidate_count
+        return {"candidate_count": candidate_count, "saved_count": saved}
     except Exception as exc:
         finished = _now()
-        run.status = "failed"
-        run.error = str(exc)[:2000]
-        run.finished_at = finished
-        run.updated_at = finished
-        session.commit()
+        with SessionLocal() as session:
+            run = session.get(TrendRun, run_id)
+            if run is not None:
+                run.status = "failed"
+                run.error = str(exc)[:2000]
+                run.finished_at = finished
+                run.updated_at = finished
+                session.commit()
         raise
 
-
 async def _score_with_follow_ups(
-    settings: Settings,
+    settings: TrendSettings,
     brand_prompt: str,
     evidence: list[TrendEvidence],
     source_config: dict[str, Any],
@@ -442,7 +471,7 @@ def _clean_text(value: str | None) -> str:
 
 
 async def _evaluate_evidence(
-    settings: Settings,
+    settings: TrendSettings,
     brand_prompt: str,
     evidence: list[TrendEvidence],
 ) -> dict[str, Any]:

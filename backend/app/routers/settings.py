@@ -17,6 +17,7 @@ from ..services import task_queue as tq
 from ..services.runtime_config import build_database_config, get_database_config
 from ..services.embedding import atom_content_hash, embed_texts, test_provider
 from ..services.chat import test_chat_provider
+from ..services.settings_snapshot import snapshot_chat_settings, snapshot_embedding_settings, snapshot_trend_settings
 from ..services.trend.collector import calculate_next_run_at, test_trend_provider
 from ..services.trend.sources import normalize_source_config
 from ..time_utils import utc_isoformat
@@ -494,7 +495,9 @@ async def test_provider_endpoint(
     if not s.embed_model:
         raise HTTPException(status_code=400, detail="请先配置 embed_model")
 
-    ok, latency_ms, error = await test_provider(s)
+    settings_snapshot = snapshot_embedding_settings(s)
+    session.close()
+    ok, latency_ms, error = await test_provider(settings_snapshot)
     if ok:
         logger.info("embedding provider 测试成功 latency=%.1fms", latency_ms)
     else:
@@ -511,7 +514,9 @@ async def test_chat_provider_endpoint(
     if not s.chat_model:
         raise HTTPException(status_code=400, detail="请先配置 chat_model")
 
-    ok, latency_ms, error = await test_chat_provider(s)
+    settings_snapshot = snapshot_chat_settings(s)
+    session.close()
+    ok, latency_ms, error = await test_chat_provider(settings_snapshot)
     if ok:
         logger.info("chat provider 测试成功 latency=%.1fms", latency_ms)
     else:
@@ -525,7 +530,9 @@ async def test_trend_provider_endpoint(
 ) -> TestProviderResult:
     """测试 Trend LLM provider；未单独配置时复用 Chat provider。"""
     s = _get_or_create_settings(session)
-    ok, latency_ms, error = await test_trend_provider(s)
+    settings_snapshot = snapshot_trend_settings(s)
+    session.close()
+    ok, latency_ms, error = await test_trend_provider(settings_snapshot)
     if ok:
         logger.info("trend provider 测试成功 latency=%.1fms", latency_ms)
     else:
@@ -636,10 +643,12 @@ async def rebuild_embeddings(
             s.embed_dim = body.embed_dim
         session.commit()
         session.refresh(s)
+        settings_snapshot = snapshot_embedding_settings(s)
+        session.close()
 
         # 以 provider 实际返回维度为准，避免用户选错维度后重建出不可写入的 vec_atoms。
         try:
-            probe_vectors = await embed_texts(s, ["sparkling embedding dimension probe"])
+            probe_vectors = await embed_texts(settings_snapshot, ["sparkling embedding dimension probe"])
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Embedding provider 测试失败：{exc}") from exc
         actual_dim = len(probe_vectors[0])

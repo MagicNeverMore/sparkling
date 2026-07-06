@@ -86,6 +86,7 @@ async def confirm_link(
     session.commit()
 
     out = _to_out(link)
+    session.close()
     await manager.broadcast("link.confirmed", out.model_dump())
     return out
 
@@ -103,6 +104,9 @@ async def ignore_link(
     link.user_ignored = True
     link.user_confirmed = False
     session.commit()
-    await manager.broadcast("link.ignored", {"id": link.id})
+    out = _to_out(link)
+    link_id_for_event = link.id
+    session.close()
+    await manager.broadcast("link.ignored", {"id": link_id_for_event})
 
-    return _to_out(link)
+    return out

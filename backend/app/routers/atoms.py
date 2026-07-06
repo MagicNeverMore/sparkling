@@ -90,6 +90,7 @@ async def create_atom(
 
     out = _to_out(atom)
     logger.info("atom 已创建 id=%s", atom.id)
+    session.close()
     await manager.broadcast("atom.created", out.model_dump())
     return out
 
@@ -128,6 +129,7 @@ async def update_atom(
         logger.info("atom 内容更新 id=%s version=%s", atom.id, atom.version)
 
     out = _to_out(atom)
+    session.close()
     await manager.broadcast("atom.updated", out.model_dump())
     return out
 
@@ -147,5 +149,7 @@ async def delete_atom(
     atom.updated_at = datetime.utcnow()
     session.commit()
     delete_atom_embedding(session, atom.id)
-    logger.info("atom 已软删除 id=%s", atom.id)
-    await manager.broadcast("atom.deleted", {"id": atom.id})
+    atom_id_for_event = atom.id
+    logger.info("atom 已软删除 id=%s", atom_id_for_event)
+    session.close()
+    await manager.broadcast("atom.deleted", {"id": atom_id_for_event})

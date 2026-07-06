@@ -7,9 +7,12 @@ from openai import AsyncOpenAI
 
 from ..models import Settings
 from .openai_compat import normalize_base_url
+from .settings_snapshot import ChatSettingsSnapshot
+
+ChatSettings = Settings | ChatSettingsSnapshot
 
 
-def _get_chat_client(settings: Settings) -> AsyncOpenAI:
+def _get_chat_client(settings: ChatSettings) -> AsyncOpenAI:
     """根据 Settings 构造 Chat 专用的 OpenAI 兼容客户端。"""
     return AsyncOpenAI(
         api_key=settings.chat_api_key or "not-set",
@@ -17,7 +20,7 @@ def _get_chat_client(settings: Settings) -> AsyncOpenAI:
     )
 
 
-async def test_chat_provider(settings: Settings) -> tuple[bool, float, str | None]:
+async def test_chat_provider(settings: ChatSettings) -> tuple[bool, float, str | None]:
     """测试 Chat provider 连通性，返回 (ok, latency_ms, error_msg)。"""
     start = time.monotonic()
     try:

@@ -3,25 +3,31 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import TypedDict
 
-from sqlalchemy.orm import Session
-
+from ..db import SessionLocal
 from ..logger import get_logger
 from ..models import Settings, ThoughtAtom, ThoughtLink
 from .embedding import knn_by_existing_embedding
+from .settings_snapshot import LinkSettingsSnapshot, snapshot_link_settings
 from .ws_manager import ConnectionManager
 
 logger = get_logger(__name__)
+LinkSettings = Settings | LinkSettingsSnapshot
+
+
+class LinkEvent(TypedDict):
+    event_type: str
+    data: dict
 
 
 async def discover_links(
-    session: Session,
     atom_id: str,
-    settings: Settings,
+    settings: LinkSettings,
     manager: ConnectionManager,
     top_k: int = 10,
     expected_version: int | None = None,
-) -> list[ThoughtLink]:
+) -> list[LinkEvent]:
     """发现与 atom_id 相关的语义关联并持久化。
 
     流程：
@@ -31,88 +37,101 @@ async def discover_links(
     4. 已存在且用户手动操作（source=user 或 ignored）的不覆盖
     5. 广播 link.created 或 link.suggested 事件
     """
-    atom = session.get(ThoughtAtom, atom_id)
-    if atom is None or atom.status == "deleted":
-        logger.debug("atom %s 不存在或已删除，跳过 link_discover", atom_id)
-        return []
-    if expected_version is not None and expected_version != atom.version:
-        logger.info(
-            "atom %s link_discover 任务版本过期，payload=%s current=%s",
-            atom_id,
-            expected_version,
-            atom.version,
-        )
-        return []
+    link_settings = (
+        snapshot_link_settings(settings)
+        if isinstance(settings, Settings)
+        else settings
+    )
+    events: list[LinkEvent] = []
 
-    candidates = knn_by_existing_embedding(atom_id, top_k)
-    if not candidates:
-        return []
+    with SessionLocal() as session:
+        atom = session.get(ThoughtAtom, atom_id)
+        if atom is None or atom.status == "deleted":
+            logger.debug("atom %s 不存在或已删除，跳过 link_discover", atom_id)
+            return []
+        if expected_version is not None and expected_version != atom.version:
+            logger.info(
+                "atom %s link_discover 任务版本过期，payload=%s current=%s",
+                atom_id,
+                expected_version,
+                atom.version,
+            )
+            return []
 
-    auto_threshold = settings.link_threshold_auto
-    suggest_threshold = settings.link_threshold_suggest
-    created: list[ThoughtLink] = []
+        candidates = knn_by_existing_embedding(atom_id, top_k)
+        if not candidates:
+            return []
 
-    for neighbor_id, similarity in candidates:
-        if similarity < suggest_threshold:
-            continue
+        auto_threshold = link_settings.link_threshold_auto
+        suggest_threshold = link_settings.link_threshold_suggest
 
-        is_auto = similarity >= auto_threshold
-        # 规范化顺序，避免 (A→B) 和 (B→A) 生成重复 link
-        from_id, to_id = sorted([atom_id, neighbor_id])
-
-        existing = (
-            session.query(ThoughtLink)
-            .filter_by(from_atom_id=from_id, to_atom_id=to_id, link_type="semantic")
-            .first()
-        )
-        if existing:
-            # 用户已手动操作过，不覆盖；AI 自动确认的 link 可以随阈值升/降级
-            if existing.user_ignored or existing.source == "user":
+        for neighbor_id, similarity in candidates:
+            if similarity < suggest_threshold:
                 continue
-            existing.confidence = similarity
-            existing.source = "ai_auto" if is_auto else "ai_suggested"
-            existing.user_confirmed = is_auto
-            session.commit()
+
+            is_auto = similarity >= auto_threshold
+            # 规范化顺序，避免 (A→B) 和 (B→A) 生成重复 link
+            from_id, to_id = sorted([atom_id, neighbor_id])
+
+            existing = (
+                session.query(ThoughtLink)
+                .filter_by(from_atom_id=from_id, to_atom_id=to_id, link_type="semantic")
+                .first()
+            )
+            if existing:
+                # 用户已手动操作过，不覆盖；AI 自动确认的 link 可以随阈值升/降级
+                if existing.user_ignored or existing.source == "user":
+                    continue
+                source = "ai_auto" if is_auto else "ai_suggested"
+                existing.confidence = similarity
+                existing.source = source
+                existing.user_confirmed = is_auto
+                event_type = "link.created" if is_auto else "link.suggested"
+                data = {
+                    "id": existing.id,
+                    "from_atom_id": from_id,
+                    "to_atom_id": to_id,
+                    "link_type": "semantic",
+                    "confidence": similarity,
+                    "source": source,
+                    "user_confirmed": is_auto,
+                }
+                session.commit()
+                events.append({"event_type": event_type, "data": data})
+                continue
+
+            link_id = str(uuid.uuid4())
+            source = "ai_auto" if is_auto else "ai_suggested"
+            link = ThoughtLink(
+                id=link_id,
+                from_atom_id=from_id,
+                to_atom_id=to_id,
+                link_type="semantic",
+                confidence=similarity,
+                source=source,
+                user_confirmed=is_auto,
+                user_ignored=False,
+                created_at=datetime.utcnow(),
+            )
+            session.add(link)
             event_type = "link.created" if is_auto else "link.suggested"
-            await manager.broadcast(event_type, {
-                "id": existing.id,
-                "from_atom_id": existing.from_atom_id,
-                "to_atom_id": existing.to_atom_id,
-                "link_type": existing.link_type,
-                "confidence": existing.confidence,
-                "source": existing.source,
-                "user_confirmed": existing.user_confirmed,
-            })
-            continue
+            data = {
+                "id": link_id,
+                "from_atom_id": from_id,
+                "to_atom_id": to_id,
+                "link_type": "semantic",
+                "confidence": similarity,
+                "source": source,
+                "user_confirmed": is_auto,
+            }
+            session.commit()
+            events.append({"event_type": event_type, "data": data})
+            logger.debug(
+                "关联已创建 %s → %s，similarity=%.4f，event=%s",
+                from_id, to_id, similarity, event_type,
+            )
 
-        link = ThoughtLink(
-            id=str(uuid.uuid4()),
-            from_atom_id=from_id,
-            to_atom_id=to_id,
-            link_type="semantic",
-            confidence=similarity,
-            source="ai_auto" if is_auto else "ai_suggested",
-            user_confirmed=is_auto,
-            user_ignored=False,
-            created_at=datetime.utcnow(),
-        )
-        session.add(link)
-        session.commit()
+    for event in events:
+        await manager.broadcast(event["event_type"], event["data"])
 
-        event_type = "link.created" if is_auto else "link.suggested"
-        await manager.broadcast(event_type, {
-            "id": link.id,
-            "from_atom_id": link.from_atom_id,
-            "to_atom_id": link.to_atom_id,
-            "link_type": link.link_type,
-            "confidence": link.confidence,
-            "source": link.source,
-            "user_confirmed": link.user_confirmed,
-        })
-        created.append(link)
-        logger.debug(
-            "关联已创建 %s → %s，similarity=%.4f，event=%s",
-            from_id, to_id, similarity, event_type,
-        )
-
-    return created
+    return events

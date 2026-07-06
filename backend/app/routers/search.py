@@ -9,6 +9,7 @@ from ..db import get_session
 from ..models import Settings, ThoughtAtom
 from ..routers.atoms import AtomOut, _to_out
 from ..services.embedding import search_similar
+from ..services.settings_snapshot import snapshot_embedding_settings
 
 router = APIRouter()
 
@@ -32,7 +33,9 @@ async def semantic_search(
     if settings is None:
         return []
 
-    candidates = await search_similar(session, q, settings, k=k)
+    settings_snapshot = snapshot_embedding_settings(settings)
+    session.close()
+    candidates = await search_similar(q, settings_snapshot, k=k)
     if not candidates:
         return []
 
