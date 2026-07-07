@@ -15,9 +15,9 @@ open(_TEST_DB_PATH, "a", encoding="utf-8").close()
 os.environ.setdefault("SPARKLING_DB_PATH", _TEST_DB_PATH)
 os.environ.setdefault("SPARKLING_CONTROL_DB_PATH", _TEST_CONTROL_DB_PATH)
 
-from app.models import AtomEmbedding, ThoughtAtom, ThoughtLink
-from app.services import embedding, linker
-from app.services.settings_snapshot import EmbeddingSettingsSnapshot, LinkSettingsSnapshot
+from app.models import AtomEmbedding, ThoughtAtom, ThoughtLink  # noqa: E402
+from app.services import embedding, linker  # noqa: E402
+from app.services.settings_snapshot import EmbeddingSettingsSnapshot, LinkSettingsSnapshot  # noqa: E402
 
 
 class _SessionTracker:
