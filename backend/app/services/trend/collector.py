@@ -32,6 +32,9 @@ MAX_EVIDENCE_ITEMS = 6
 MAX_FOLLOW_UP_ROUNDS = 2
 MAX_TREND_BRAND_PROMPT_CHARS = 4_000
 MAX_TREND_COMPLETION_TOKENS = 1_600
+MAX_TREND_SEARCH_QUERIES = 5
+MAX_TREND_SEARCH_QUERY_CHARS = 120
+MAX_TREND_QUERY_PLAN_TOKENS = 600
 TREND_PROVIDER_TEST_TIMEOUT_SECONDS = 20.0
 TREND_LLM_TIMEOUT_SECONDS = 120.0
 TrendSettings = Settings | TrendSettingsSnapshot
@@ -308,7 +311,7 @@ async def collect_trends(run_id: str) -> dict[str, int]:
             run.error = None
             settings_snapshot = snapshot_trend_settings(settings)
             source_config = _load_source_config(settings_snapshot)
-            query = _truncate_llm_text(
+            brand_prompt = _truncate_llm_text(
                 settings_snapshot.trend_brand_prompt or DEFAULT_TREND_PROMPT,
                 MAX_TREND_BRAND_PROMPT_CHARS,
             )
@@ -326,7 +329,8 @@ async def collect_trends(run_id: str) -> dict[str, int]:
                 result_limit,
             )
 
-        candidates = await discover_candidates(query, source_config)
+        search_queries = await plan_search_queries(settings_snapshot, brand_prompt, source_config)
+        candidates = await _discover_candidates_from_queries(search_queries, source_config)
         with SessionLocal() as session:
             run = session.get(TrendRun, run_id)
             if run is None:
@@ -346,7 +350,7 @@ async def collect_trends(run_id: str) -> dict[str, int]:
             logger.debug("Trend 候选开始评分 run_id=%s source=%s", run_id, candidate.source)
             result = await _score_with_follow_ups(
                 settings_snapshot,
-                query,
+                brand_prompt,
                 evidence,
                 source_config,
                 seen_evidence_urls,
@@ -399,6 +403,114 @@ async def collect_trends(run_id: str) -> dict[str, int]:
                 session.commit()
         logger.exception("Trend 采集失败 run_id=%s error=%s", run_id, exc)
         raise
+
+
+async def plan_search_queries(
+    settings: TrendSettings,
+    brand_prompt: str,
+    source_config: dict[str, Any],
+) -> list[str]:
+    """让 LLM 根据完整 Brand Brain 规划 source 搜索 query。"""
+    enabled_sources = [
+        {"source": source, "limit": config.get("limit")}
+        for source, config in normalize_source_config(source_config).items()
+        if source != "google" and config.get("enabled")
+    ]
+    if not enabled_sources:
+        raise ValueError("搜索 query 生成失败：没有启用可用的信息源")
+
+    client, model = _get_trend_client(settings)
+    payload = {
+        "brand_brain_prompt": _truncate_llm_text(brand_prompt, MAX_TREND_BRAND_PROMPT_CHARS),
+        "enabled_sources": enabled_sources,
+        "max_queries": MAX_TREND_SEARCH_QUERIES,
+        "max_query_chars": MAX_TREND_SEARCH_QUERY_CHARS,
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You plan search queries for trend discovery. "
+                "Use the full Brand Brain prompt to infer search directions. "
+                "Do not invent news, facts, URLs, sources, metrics, or quotes. "
+                "Return JSON only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Create concise search queries suitable for Reddit, GitHub repository search, "
+                "and Hacker News Algolia. Return JSON with exactly one key: queries. "
+                "queries must be an array of 1 to 5 strings, each <= 120 characters. "
+                "Prefer topic phrases over instructions or audience/persona text. "
+                f"Input:\n{json.dumps(payload, ensure_ascii=False)}"
+            ),
+        },
+    ]
+    try:
+        try:
+            response = await asyncio.wait_for(
+                _create_json_chat_completion(
+                    client,
+                    model=model,
+                    messages=messages,
+                    max_tokens=MAX_TREND_QUERY_PLAN_TOKENS,
+                    temperature=0.1,
+                ),
+                timeout=TREND_LLM_TIMEOUT_SECONDS + 5,
+            )
+        except Exception as exc:
+            raise ValueError(f"搜索 query 生成失败：{exc}") from exc
+    finally:
+        if not client.is_closed():
+            await client.close()
+
+    content = response.choices[0].message.content or "{}"
+    try:
+        parsed = _parse_json_object(content)
+    except Exception as exc:
+        raise ValueError(f"搜索 query 生成失败：LLM 返回不是有效 JSON: {exc}") from exc
+    queries = _normalise_search_queries(parsed.get("queries"))
+    if not queries:
+        raise ValueError("搜索 query 生成失败：LLM 没有返回可用 queries")
+    logger.info("Trend 搜索 query 已生成 count=%d", len(queries))
+    return queries
+
+
+async def _discover_candidates_from_queries(
+    queries: list[str],
+    source_config: dict[str, Any],
+) -> list[TrendCandidate]:
+    candidates: list[TrendCandidate] = []
+    seen: set[str] = set()
+    for query in queries:
+        query_candidates = await discover_candidates(query, source_config)
+        logger.info("Trend query 候选发现完成 query=%s candidates=%d", query, len(query_candidates))
+        for candidate in query_candidates:
+            key = canonical_url(candidate.url)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
+    return candidates
+
+
+def _normalise_search_queries(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    queries: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        query = _clean_text(str(item))[:MAX_TREND_SEARCH_QUERY_CHARS]
+        key = query.lower()
+        if not query or key in seen:
+            continue
+        queries.append(query)
+        seen.add(key)
+        if len(queries) >= MAX_TREND_SEARCH_QUERIES:
+            break
+    return queries
+
 
 async def _score_with_follow_ups(
     settings: TrendSettings,
