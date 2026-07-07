@@ -29,16 +29,20 @@ class ConnectionManager:
     async def broadcast(self, event_type: str, data: dict) -> None:
         """向所有在线客户端广播 JSON 事件，单个断开不影响其他客户端。"""
         if not self._connections:
+            logger.debug("WS 广播跳过：无在线客户端 event=%s", event_type)
             return
         payload = json.dumps({"type": event_type, "data": data}, ensure_ascii=False)
         dead: list[WebSocket] = []
+        logger.debug("WS 广播开始 event=%s connections=%d", event_type, len(self._connections))
         for ws in list(self._connections):
             try:
                 await ws.send_text(payload)
             except Exception:
+                logger.exception("WS 广播失败 event=%s", event_type)
                 dead.append(ws)
         for ws in dead:
             self.disconnect(ws)
+        logger.debug("WS 广播完成 event=%s dead=%d active=%d", event_type, len(dead), len(self._connections))
 
 
 # 模块级单例，所有 router 和 worker 共用同一个 manager 实例

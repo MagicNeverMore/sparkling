@@ -38,6 +38,7 @@ logger = get_logger(__name__)
 # 防止 rebuild 和 embed_atom 同时操作 vec_atoms
 _vec_table_lock = asyncio.Lock()
 EmbeddingSettings = Settings | EmbeddingSettingsSnapshot
+MAX_EMBEDDING_TEXT_CHARS = 12_000
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ async def embed_texts(settings: EmbeddingSettings, texts: list[str]) -> list[lis
     client = _get_client(settings)
     kwargs: dict = dict(
         model=cast(str, settings.embed_model),
-        input=texts,
+        input=[prepare_embedding_text(text) for text in texts],
     )
     # 指定维度：OpenAI text-embedding-3-* 支持 dimensions 参数；
     # 不支持的 provider（如 Ollama 旧版）可能忽略或报错，需用户调整
@@ -74,6 +75,14 @@ async def embed_texts(settings: EmbeddingSettings, texts: list[str]) -> list[lis
         kwargs["dimensions"] = settings.embed_dim
     response = await client.embeddings.create(**kwargs)
     return [item.embedding for item in response.data]
+
+
+def prepare_embedding_text(text: str) -> str:
+    """限制 embedding 输入大小，避免超长内容拖垮 provider 或触发 token limit。"""
+    value = (text or "").strip()
+    if len(value) <= MAX_EMBEDDING_TEXT_CHARS:
+        return value
+    return value[:MAX_EMBEDDING_TEXT_CHARS]
 
 
 async def test_provider(settings: EmbeddingSettings) -> tuple[bool, float, str | None]:

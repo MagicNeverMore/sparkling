@@ -68,6 +68,7 @@ def claim_next(session: Session) -> TaskQueue | None:
     task.attempts += 1
     task.updated_at = datetime.utcnow()
     session.commit()
+    logger.debug("已领取任务 id=%s type=%s attempts=%d", task.id, task.task_type, task.attempts)
     return task
 
 
@@ -78,6 +79,7 @@ def mark_done(session: Session, task_id: str) -> None:
         task.status = "done"
         task.updated_at = datetime.utcnow()
         session.commit()
+        logger.debug("任务已完成 id=%s type=%s", task.id, task.task_type)
 
 
 def mark_failed(session: Session, task_id: str, error: str, max_attempts: int = 3) -> None:
@@ -114,4 +116,5 @@ def retry_failed(session: Session, task_type: str | None = None) -> int:
             get_wakeup_event().set()
         except RuntimeError:
             pass
+    logger.info("failed 任务已重试 task_type=%s count=%d", task_type, len(tasks))
     return len(tasks)

@@ -10,11 +10,13 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..db import get_session
+from ..logger import get_logger
 from ..models import TrendItem, TrendRun
 from ..services.trend.collector import enqueue_trend_run
 from ..time_utils import utc_isoformat
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 class TrendResourceOut(BaseModel):
@@ -155,6 +157,13 @@ def list_trends(
         filtered.append(item)
 
     page = filtered[offset : offset + limit]
+    logger.debug(
+        "Trend 列表已读取 total=%d page=%d limit=%d offset=%d",
+        len(filtered),
+        len(page),
+        limit,
+        offset,
+    )
     return TrendListOut(items=[_to_item_out(item) for item in page], total=len(filtered))
 
 
@@ -167,14 +176,17 @@ def run_trend_collection(session: Session = Depends(get_session)) -> TrendRunOut
         .first()
     )
     if active:
+        logger.info("Trend 采集已有运行中任务 run_id=%s status=%s", active.id, active.status)
         return _to_run_out(active)
     run = enqueue_trend_run(session, "manual")
+    logger.info("Trend 手动采集已入队 run_id=%s", run.id)
     return _to_run_out(run)
 
 
 @router.get("/runs/latest", response_model=Optional[TrendRunOut])
 def latest_trend_run(session: Session = Depends(get_session)) -> Optional[TrendRunOut]:
     run = session.query(TrendRun).order_by(TrendRun.created_at.desc()).first()
+    logger.debug("读取最新 Trend run found=%s", run is not None)
     return _to_run_out(run) if run else None
 
 
@@ -183,4 +195,5 @@ def get_trend(trend_id: str, session: Session = Depends(get_session)) -> TrendIt
     item = session.get(TrendItem, trend_id)
     if not item:
         raise HTTPException(status_code=404, detail="Trend not found")
+    logger.debug("读取 Trend 详情 trend_id=%s", trend_id)
     return _to_item_out(item)

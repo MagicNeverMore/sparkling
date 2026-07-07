@@ -1,0 +1,3 @@
+export const MAX_ATOM_CONTENT_CHARS = 12_000
+export const MAX_SEARCH_QUERY_CHARS = 2_000
+export const MAX_TREND_BRAND_PROMPT_CHARS = 4_000

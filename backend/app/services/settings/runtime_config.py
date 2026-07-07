@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from ...config import BACKEND_DIR, config
+from ...logger import get_logger
 
 CONTROL_DB_PATH = Path(
     os.path.expanduser(os.getenv("SPARKLING_CONTROL_DB_PATH", str(BACKEND_DIR / "control.db")))
@@ -20,6 +21,7 @@ CONTROL_DB_PATH = Path(
 if not CONTROL_DB_PATH.is_absolute():
     CONTROL_DB_PATH = BACKEND_DIR / CONTROL_DB_PATH
 CONTROL_DB_PATH = CONTROL_DB_PATH.resolve()
+logger = get_logger(__name__)
 
 
 DatabaseBackend = Literal["sqlite", "postgresql"]
@@ -65,12 +67,15 @@ def load_database_config() -> DatabaseRuntimeConfig:
     if row is None:
         seeded = _config_from_env()
         save_database_config(seeded)
+        logger.info("control DB 未找到数据库配置，已从环境初始化 backend=%s", seeded.db_backend)
         return seeded
-    return DatabaseRuntimeConfig(
+    runtime_config = DatabaseRuntimeConfig(
         db_backend=row["db_backend"],
         db_path=row["db_path"],
         postgresql_url=row["postgresql_url"],
     )
+    logger.debug("已从 control DB 读取数据库配置 backend=%s", runtime_config.db_backend)
+    return runtime_config
 
 
 def save_database_config(runtime_config: DatabaseRuntimeConfig) -> None:
@@ -95,6 +100,7 @@ def save_database_config(runtime_config: DatabaseRuntimeConfig) -> None:
             ),
         )
         conn.commit()
+    logger.info("数据库配置已保存到 control DB backend=%s", runtime_config.db_backend)
 
 
 def build_database_config(
@@ -104,6 +110,7 @@ def build_database_config(
 ) -> DatabaseRuntimeConfig:
     """标准化用户输入。校验业务语义由 router/db manager 负责。"""
     if db_backend not in {"sqlite", "postgresql"}:
+        logger.warning("数据库配置标准化失败：不支持的 backend=%s", db_backend)
         raise ValueError("db_backend must be sqlite or postgresql")
 
     normalized_path = None
@@ -115,11 +122,13 @@ def build_database_config(
 
     normalized_url = postgresql_url.strip() if postgresql_url else None
 
-    return DatabaseRuntimeConfig(
+    runtime_config = DatabaseRuntimeConfig(
         db_backend=db_backend,
         db_path=normalized_path,
         postgresql_url=normalized_url,
     )
+    logger.debug("数据库配置已标准化 backend=%s has_url=%s", db_backend, normalized_url is not None)
+    return runtime_config
 
 
 def _config_from_env() -> DatabaseRuntimeConfig:
@@ -143,6 +152,7 @@ def connect_control_db() -> sqlite3.Connection:
     control DB 不随业务数据库热切换，适合保存登录用户与数据库连接配置。
     """
     _ensure_control_db()
+    logger.debug("连接 control DB path=%s", CONTROL_DB_PATH)
     return _connect()
 
 
@@ -183,3 +193,4 @@ def _ensure_control_db() -> None:
             """
         )
         conn.commit()
+    logger.debug("control DB schema 已确认 path=%s", CONTROL_DB_PATH)

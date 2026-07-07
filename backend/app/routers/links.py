@@ -8,11 +8,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..db import get_session
+from ..logger import get_logger
 from ..models import Settings, ThoughtAtom, ThoughtLink
 from ..services.ws_manager import manager
 from ..time_utils import utc_isoformat
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 class LinkOut(BaseModel):
@@ -62,12 +64,19 @@ async def list_links(session: Session = Depends(get_session)) -> list[LinkOut]:
         .order_by(ThoughtLink.created_at.desc())
         .all()
     )
-    return [
+    visible_links = [
         _to_out(lk)
         for lk in links
         if lk.from_atom_id in valid_atom_ids and lk.to_atom_id in valid_atom_ids
         and (lk.source == "user" or (lk.confidence is not None and lk.confidence >= suggest_threshold))
     ]
+    logger.debug(
+        "关联列表已生成 total=%d visible=%d suggest_threshold=%.3f",
+        len(links),
+        len(visible_links),
+        suggest_threshold,
+    )
+    return visible_links
 
 
 @router.post("/{link_id}/confirm", response_model=LinkOut)
@@ -86,6 +95,7 @@ async def confirm_link(
     session.commit()
 
     out = _to_out(link)
+    logger.info("关联已确认 link_id=%s from=%s to=%s", link.id, link.from_atom_id, link.to_atom_id)
     session.close()
     await manager.broadcast("link.confirmed", out.model_dump())
     return out
@@ -106,6 +116,7 @@ async def ignore_link(
     session.commit()
     out = _to_out(link)
     link_id_for_event = link.id
+    logger.info("关联已忽略 link_id=%s from=%s to=%s", link.id, link.from_atom_id, link.to_atom_id)
     session.close()
     await manager.broadcast("link.ignored", {"id": link_id_for_event})
 

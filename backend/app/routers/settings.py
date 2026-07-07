@@ -5,7 +5,7 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -18,7 +18,7 @@ from ..services.settings.runtime_config import build_database_config, get_databa
 from ..services.memory.embedding import atom_content_hash, embed_texts, test_provider
 from ..services.ai.chat import test_chat_provider
 from ..services.settings.settings_snapshot import snapshot_chat_settings, snapshot_embedding_settings, snapshot_trend_settings
-from ..services.trend.collector import calculate_next_run_at, test_trend_provider
+from ..services.trend.collector import MAX_TREND_BRAND_PROMPT_CHARS, calculate_next_run_at, test_trend_provider
 from ..services.trend.sources import normalize_source_config
 from ..time_utils import DEFAULT_TIMEZONE, get_timezone, utc_isoformat
 from ..vector_store import create_vec_table, ensure_vec_table
@@ -80,7 +80,7 @@ class SettingsOut(BaseModel):
 
 
 class TrendSettingsUpdate(BaseModel):
-    brand_prompt: Optional[str] = None
+    brand_prompt: Optional[str] = Field(default=None, max_length=MAX_TREND_BRAND_PROMPT_CHARS)
     llm_base_url: Optional[str] = None
     llm_api_key: Optional[str] = None
     llm_model: Optional[str] = None

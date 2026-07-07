@@ -3,6 +3,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { useToast } from '../../components/useToast'
 import { api, ApiError } from '../../lib/api'
 import { useI18n } from '../../lib/I18nProvider'
+import { MAX_TREND_BRAND_PROMPT_CHARS } from '../../lib/limits'
 import { formatDateTime } from '../../lib/time'
 import type { TrendScheduleMode, TrendSettingsRaw } from './types'
 
@@ -153,9 +154,11 @@ export default function TrendSettingsSection() {
             value={brandPrompt}
             onChange={(event) => setBrandPrompt(event.target.value)}
             placeholder={t('settings.brandPromptPlaceholder')}
+            maxLength={MAX_TREND_BRAND_PROMPT_CHARS}
             rows={5}
             className="mt-2 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-950 outline-none placeholder:text-slate-400 focus:border-violet-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-600"
           />
+          <span className="mt-1 block text-right text-xs text-slate-500">{brandPrompt.length}/{MAX_TREND_BRAND_PROMPT_CHARS}</span>
         </label>
 
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50">

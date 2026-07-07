@@ -5,11 +5,13 @@ import time
 
 from openai import AsyncOpenAI
 
+from ...logger import get_logger
 from ...models import Settings
 from .openai_compat import normalize_base_url
 from ..settings.settings_snapshot import ChatSettingsSnapshot
 
 ChatSettings = Settings | ChatSettingsSnapshot
+logger = get_logger(__name__)
 
 
 def _get_chat_client(settings: ChatSettings) -> AsyncOpenAI:
@@ -25,13 +27,16 @@ async def test_chat_provider(settings: ChatSettings) -> tuple[bool, float, str |
     start = time.monotonic()
     try:
         client = _get_chat_client(settings)
+        logger.info("开始测试 Chat provider model=%s", settings.chat_model or "gpt-4.1-mini")
         await client.chat.completions.create(
             model=settings.chat_model or "gpt-4.1-mini",
             messages=[{"role": "user", "content": "say hello in one word"}],
             max_tokens=10,
         )
         latency = (time.monotonic() - start) * 1000
+        logger.info("Chat provider 测试成功 model=%s latency=%.1fms", settings.chat_model, latency)
         return True, round(latency, 1), None
     except Exception as exc:
         latency = (time.monotonic() - start) * 1000
+        logger.warning("Chat provider 测试失败 model=%s latency=%.1fms error=%s", settings.chat_model, latency, exc)
         return False, round(latency, 1), str(exc)

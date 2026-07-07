@@ -8,7 +8,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from ...logger import get_logger
 from ...models import Settings
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,7 @@ class TrendSettingsSnapshot:
 
 
 def snapshot_embedding_settings(settings: Settings) -> EmbeddingSettingsSnapshot:
+    logger.debug("创建 Embedding settings snapshot model=%s dim=%s", settings.embed_model, settings.embed_dim)
     return EmbeddingSettingsSnapshot(
         embed_base_url=settings.embed_base_url,
         embed_api_key=settings.embed_api_key,
@@ -65,6 +69,7 @@ def snapshot_embedding_settings(settings: Settings) -> EmbeddingSettingsSnapshot
 
 
 def snapshot_chat_settings(settings: Settings) -> ChatSettingsSnapshot:
+    logger.debug("创建 Chat settings snapshot model=%s", settings.chat_model)
     return ChatSettingsSnapshot(
         chat_base_url=settings.chat_base_url,
         chat_api_key=settings.chat_api_key,
@@ -73,6 +78,11 @@ def snapshot_chat_settings(settings: Settings) -> ChatSettingsSnapshot:
 
 
 def snapshot_link_settings(settings: Settings) -> LinkSettingsSnapshot:
+    logger.debug(
+        "创建 Link settings snapshot auto=%.3f suggest=%.3f",
+        settings.link_threshold_auto,
+        settings.link_threshold_suggest,
+    )
     return LinkSettingsSnapshot(
         link_threshold_auto=settings.link_threshold_auto,
         link_threshold_suggest=settings.link_threshold_suggest,
@@ -80,6 +90,7 @@ def snapshot_link_settings(settings: Settings) -> LinkSettingsSnapshot:
 
 
 def snapshot_trend_settings(settings: Settings) -> TrendSettingsSnapshot:
+    logger.debug("创建 Trend settings snapshot model=%s timezone=%s", settings.trend_model or settings.chat_model, settings.trend_timezone)
     return TrendSettingsSnapshot(
         chat_base_url=settings.chat_base_url,
         chat_api_key=settings.chat_api_key,

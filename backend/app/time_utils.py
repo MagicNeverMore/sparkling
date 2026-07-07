@@ -8,8 +8,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .logger import get_logger
+
 
 DEFAULT_TIMEZONE = "UTC"
+logger = get_logger(__name__)
 
 
 def utc_isoformat(value: datetime) -> str:
@@ -27,6 +30,7 @@ def get_timezone(value: str | None) -> ZoneInfo:
     try:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError as exc:
+        logger.warning("无效 timezone value=%s", name)
         raise ValueError(f"Invalid timezone: {name}") from exc
 
 
@@ -43,5 +47,6 @@ def local_to_utc_naive(value: datetime) -> datetime:
     """Convert a local aware datetime to the naive UTC format used by the database."""
     if value.tzinfo is None:
         msg = "local_to_utc_naive requires an aware datetime"
+        logger.warning("本地时间转换失败：datetime 缺少 tzinfo")
         raise ValueError(msg)
     return value.astimezone(timezone.utc).replace(tzinfo=None)

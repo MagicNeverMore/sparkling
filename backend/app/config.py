@@ -13,8 +13,11 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .logger import get_logger
+
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+logger = get_logger(__name__)
 
 
 class AppConfig(BaseSettings):
@@ -81,3 +84,10 @@ class AppConfig(BaseSettings):
 
 
 config = AppConfig()
+logger.info(
+    "应用配置已加载 host=%s port=%s db_backend=%s dev_origin=%s",
+    config.host,
+    config.port,
+    config.effective_db_backend,
+    config.dev_origin,
+)

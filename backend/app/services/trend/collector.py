@@ -30,6 +30,8 @@ MAX_FETCH_BYTES = 500_000
 MAX_PAGE_TEXT_CHARS = 6_000
 MAX_EVIDENCE_ITEMS = 6
 MAX_FOLLOW_UP_ROUNDS = 2
+MAX_TREND_BRAND_PROMPT_CHARS = 4_000
+MAX_TREND_COMPLETION_TOKENS = 1_600
 TREND_PROVIDER_TEST_TIMEOUT_SECONDS = 20.0
 TREND_LLM_TIMEOUT_SECONDS = 120.0
 TrendSettings = Settings | TrendSettingsSnapshot
@@ -288,6 +290,7 @@ def _parse_schedule_time(value: str | None) -> tuple[int, int]:
 
 async def collect_trends(run_id: str) -> dict[str, int]:
     try:
+        logger.info("Trend 采集开始 run_id=%s", run_id)
         with SessionLocal() as session:
             run = session.get(TrendRun, run_id)
             if run is None:
@@ -305,7 +308,10 @@ async def collect_trends(run_id: str) -> dict[str, int]:
             run.error = None
             settings_snapshot = snapshot_trend_settings(settings)
             source_config = _load_source_config(settings_snapshot)
-            query = (settings_snapshot.trend_brand_prompt or DEFAULT_TREND_PROMPT).strip()
+            query = _truncate_llm_text(
+                settings_snapshot.trend_brand_prompt or DEFAULT_TREND_PROMPT,
+                MAX_TREND_BRAND_PROMPT_CHARS,
+            )
             threshold = (
                 settings_snapshot.trend_score_threshold
                 if settings_snapshot.trend_score_threshold is not None
@@ -313,6 +319,12 @@ async def collect_trends(run_id: str) -> dict[str, int]:
             )
             result_limit = max(1, min(int(settings_snapshot.trend_result_limit or 20), 100))
             session.commit()
+            logger.info(
+                "Trend 采集配置已加载 run_id=%s threshold=%.1f result_limit=%d",
+                run_id,
+                threshold,
+                result_limit,
+            )
 
         candidates = await discover_candidates(query, source_config)
         with SessionLocal() as session:
@@ -322,6 +334,7 @@ async def collect_trends(run_id: str) -> dict[str, int]:
             run.candidate_count = len(candidates)
             run.updated_at = _now()
             session.commit()
+        logger.info("Trend 候选发现完成 run_id=%s candidates=%d", run_id, len(candidates))
 
         saved = 0
         seen_evidence_urls: set[str] = set()
@@ -330,6 +343,7 @@ async def collect_trends(run_id: str) -> dict[str, int]:
                 break
             evidence = [await _build_evidence(candidate)]
             seen_evidence_urls.add(canonical_url(candidate.url))
+            logger.debug("Trend 候选开始评分 run_id=%s source=%s", run_id, candidate.source)
             result = await _score_with_follow_ups(
                 settings_snapshot,
                 query,
@@ -338,6 +352,12 @@ async def collect_trends(run_id: str) -> dict[str, int]:
                 seen_evidence_urls,
             )
             if _score_value(result.get("score")) < threshold:
+                logger.debug(
+                    "Trend 候选评分低于阈值 run_id=%s score=%.1f threshold=%.1f",
+                    run_id,
+                    _score_value(result.get("score")),
+                    threshold,
+                )
                 continue
 
             resources = _validated_resources(result.get("resources"), evidence)
@@ -347,6 +367,7 @@ async def collect_trends(run_id: str) -> dict[str, int]:
             with SessionLocal() as session:
                 _upsert_trend_item(session, result, resources)
             saved += 1
+            logger.info("Trend 候选已入库 run_id=%s saved=%d score=%.1f", run_id, saved, _score_value(result.get("score")))
 
         finished = _now()
         with SessionLocal() as session:
@@ -364,6 +385,7 @@ async def collect_trends(run_id: str) -> dict[str, int]:
                     settings.trend_next_run_at = calculate_next_run_at(settings, finished)
             session.commit()
             candidate_count = run.candidate_count
+        logger.info("Trend 采集完成 run_id=%s candidates=%d saved=%d", run_id, candidate_count, saved)
         return {"candidate_count": candidate_count, "saved_count": saved}
     except Exception as exc:
         finished = _now()
@@ -375,6 +397,7 @@ async def collect_trends(run_id: str) -> dict[str, int]:
                 run.finished_at = finished
                 run.updated_at = finished
                 session.commit()
+        logger.exception("Trend 采集失败 run_id=%s error=%s", run_id, exc)
         raise
 
 async def _score_with_follow_ups(
@@ -415,6 +438,7 @@ async def _score_with_follow_ups(
 
 async def _build_evidence(candidate: TrendCandidate) -> TrendEvidence:
     fetched = await fetch_url_detail(candidate.url)
+    logger.debug("Trend evidence 已构建 source=%s ok=%s", candidate.source, fetched.ok)
     return TrendEvidence(candidate=candidate, fetched=fetched)
 
 
@@ -447,6 +471,7 @@ async def fetch_url_detail(url: str) -> WebFetchResult:
                     text=body_text,
                 )
     except Exception as exc:
+        logger.warning("Trend URL 抓取失败 url=%s error=%s", url, exc)
         return WebFetchResult(url=url, final_url=url, ok=False, error=str(exc)[:500])
 
 
@@ -473,14 +498,19 @@ def _clean_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", html.unescape(value)).strip()
 
 
+def _truncate_llm_text(value: str | None, max_chars: int) -> str:
+    return _clean_text(value)[:max_chars]
+
+
 async def _evaluate_evidence(
     settings: TrendSettings,
     brand_prompt: str,
     evidence: list[TrendEvidence],
 ) -> dict[str, Any]:
     client, model = _get_trend_client(settings)
+    safe_brand_prompt = _truncate_llm_text(brand_prompt, MAX_TREND_BRAND_PROMPT_CHARS)
     payload = {
-        "brand_prompt": brand_prompt,
+        "brand_prompt": safe_brand_prompt,
         "evidence": [item.to_llm_dict() for item in evidence[:MAX_EVIDENCE_ITEMS]],
     }
     messages = [
@@ -511,6 +541,7 @@ async def _evaluate_evidence(
                 client,
                 model=model,
                 messages=messages,
+                max_tokens=MAX_TREND_COMPLETION_TOKENS,
                 temperature=0.2,
             ),
             timeout=TREND_LLM_TIMEOUT_SECONDS + 5,
@@ -521,6 +552,7 @@ async def _evaluate_evidence(
     content = response.choices[0].message.content or "{}"
     parsed = _parse_json_object(content)
     parsed["score"] = _score_value(parsed.get("score"))
+    logger.debug("Trend LLM 评分完成 score=%.1f evidence_count=%d", parsed["score"], len(evidence))
     return parsed
 
 

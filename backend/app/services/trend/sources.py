@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -21,6 +21,11 @@ DEFAULT_SOURCE_CONFIG: dict[str, dict[str, Any]] = {
     "hackernews": {"enabled": True, "limit": 8},
     "google": {"enabled": False, "limit": 8},
 }
+MAX_CANDIDATE_TITLE_CHARS = 500
+MAX_CANDIDATE_URL_CHARS = 2_000
+MAX_CANDIDATE_SUMMARY_CHARS = 2_000
+MAX_CANDIDATE_METADATA_ITEMS = 20
+MAX_CANDIDATE_METADATA_TEXT_CHARS = 500
 
 
 @dataclass(frozen=True)
@@ -34,9 +39,47 @@ class TrendCandidate:
     metadata: dict[str, Any] | None = None
 
     def to_llm_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["metadata"] = data["metadata"] or {}
-        return data
+        return {
+            "source": _truncate_text(self.source, 80),
+            "title": _truncate_text(self.title, MAX_CANDIDATE_TITLE_CHARS),
+            "url": _truncate_text(self.url, MAX_CANDIDATE_URL_CHARS),
+            "summary": _truncate_text(self.summary, MAX_CANDIDATE_SUMMARY_CHARS),
+            "published_at": _truncate_text(self.published_at, 120),
+            "score_hint": self.score_hint,
+            "metadata": _safe_metadata(self.metadata),
+        }
+
+
+def _truncate_text(value: Any, max_chars: int) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text[:max_chars] if text else None
+
+
+def _safe_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {}
+    safe: dict[str, Any] = {}
+    for index, (key, value) in enumerate(metadata.items()):
+        if index >= MAX_CANDIDATE_METADATA_ITEMS:
+            break
+        safe_key = str(key)[:80]
+        if isinstance(value, (int, float, bool)) or value is None:
+            safe[safe_key] = value
+        elif isinstance(value, list):
+            safe[safe_key] = [
+                _truncate_text(item, MAX_CANDIDATE_METADATA_TEXT_CHARS)
+                for item in value[:10]
+            ]
+        elif isinstance(value, dict):
+            safe[safe_key] = {
+                str(child_key)[:80]: _truncate_text(child_value, MAX_CANDIDATE_METADATA_TEXT_CHARS)
+                for child_key, child_value in list(value.items())[:10]
+            }
+        else:
+            safe[safe_key] = _truncate_text(value, MAX_CANDIDATE_METADATA_TEXT_CHARS)
+    return safe
 
 
 def normalize_source_config(config: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -112,14 +155,19 @@ async def discover_candidates(
         for source, fetcher in source_calls:
             source_cfg = config[source]
             if not source_cfg.get("enabled"):
+                logger.debug("Trend source 已禁用 source=%s", source)
                 continue
             limit = limit_override or int(source_cfg.get("limit") or 8)
             try:
-                results.extend(await fetcher(client, search_query, source_cfg, limit))
+                source_results = await fetcher(client, search_query, source_cfg, limit)
+                results.extend(source_results)
+                logger.info("Trend source 获取完成 source=%s count=%d limit=%d", source, len(source_results), limit)
             except Exception as exc:
                 logger.warning("Trend source %s 获取失败: %s", source, exc)
         # v1 保留 google 配置位，但不直接抓搜索页。
-        return _dedupe_candidates(results)
+        unique = _dedupe_candidates(results)
+        logger.info("Trend 候选去重完成 raw=%d unique=%d", len(results), len(unique))
+        return unique
 
 
 async def _fetch_reddit(

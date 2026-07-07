@@ -4,10 +4,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from ..logger import get_logger
 from ..services import auth as auth_service
 from ..services.auth import AuthUser
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 class UserOut(BaseModel):
@@ -41,6 +43,7 @@ class UserUpdateIn(BaseModel):
 def require_current_user(request: Request) -> AuthUser:
     user = getattr(request.state, "user", None)
     if user is None:
+        logger.warning("认证拦截：未登录访问受保护接口 path=%s", request.url.path)
         raise HTTPException(status_code=401, detail="Unauthorized")
     return user
 
@@ -52,6 +55,7 @@ def user_to_out(user: AuthUser) -> UserOut:
 @router.get("/status", response_model=AuthStatusOut)
 def status(request: Request) -> AuthStatusOut:
     user = getattr(request.state, "user", None)
+    logger.debug("认证状态查询 authenticated=%s", user is not None)
     return AuthStatusOut(
         initialized=auth_service.has_user(),
         authenticated=user is not None,
@@ -69,6 +73,7 @@ def register(body: RegisterIn, request: Request, response: Response) -> UserOut:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     token, expires_at = auth_service.create_session(user.id)
     _set_session_cookie(response, request, token, expires_at)
+    logger.info("注册完成并已登录 username=%s", user.username)
     return user_to_out(user)
 
 
@@ -80,6 +85,7 @@ def login(body: LoginIn, request: Request, response: Response) -> UserOut:
         raise HTTPException(status_code=401, detail="用户名或密码错误") from exc
     token, expires_at = auth_service.create_session(user.id)
     _set_session_cookie(response, request, token, expires_at)
+    logger.info("登录完成 username=%s", user.username)
     return user_to_out(user)
 
 
@@ -93,10 +99,12 @@ def logout(request: Request, response: Response) -> None:
         samesite="lax",
         secure=_is_secure_request(request),
     )
+    logger.info("用户已退出登录")
 
 
 @router.get("/me", response_model=UserOut)
 def me(user: AuthUser = Depends(require_current_user)) -> UserOut:
+    logger.debug("读取当前用户 username=%s", user.username)
     return user_to_out(user)
 
 
@@ -110,6 +118,7 @@ def update_me(body: UserUpdateIn, _user: AuthUser = Depends(require_current_user
         )
     except auth_service.AuthValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    logger.info("当前用户资料已更新 username=%s", user.username)
     return user_to_out(user)
 
 

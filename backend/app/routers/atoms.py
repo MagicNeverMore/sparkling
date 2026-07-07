@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_session
@@ -19,14 +19,15 @@ from ..time_utils import utc_isoformat
 
 logger = get_logger(__name__)
 router = APIRouter()
+MAX_ATOM_CONTENT_CHARS = 12_000
 
 
 class AtomCreate(BaseModel):
-    content: str
+    content: str = Field(..., min_length=1, max_length=MAX_ATOM_CONTENT_CHARS)
 
 
 class AtomPatch(BaseModel):
-    content: Optional[str] = None
+    content: Optional[str] = Field(default=None, min_length=1, max_length=MAX_ATOM_CONTENT_CHARS)
     version: Optional[int] = None  # 传则做乐观锁校验
 
 

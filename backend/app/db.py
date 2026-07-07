@@ -18,6 +18,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+from .logger import get_logger
 from .services.settings.runtime_config import (
     DatabaseRuntimeConfig,
     load_database_config,
@@ -25,6 +26,7 @@ from .services.settings.runtime_config import (
 )
 
 DatabaseBackend = Literal["sqlite", "postgresql"]
+logger = get_logger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -43,6 +45,7 @@ class DatabaseManager:
         self._sessionmaker: sessionmaker | None = None
         self._startup_error: DatabaseConnectionError | None = None
         try:
+            logger.info("初始化数据库连接 backend=%s", self._config.db_backend)
             self._engine = self._create_engine(self._config)
             self._sessionmaker = sessionmaker(
                 bind=self._engine,
@@ -50,8 +53,10 @@ class DatabaseManager:
                 autocommit=False,
                 future=True,
             )
+            logger.info("数据库连接初始化完成 backend=%s", self._config.db_backend)
         except DatabaseConnectionError as exc:
             self._startup_error = exc
+            logger.warning("数据库连接初始化失败 backend=%s error=%s", self._config.db_backend, exc)
 
     @property
     def backend(self) -> DatabaseBackend:
@@ -108,22 +113,26 @@ class DatabaseManager:
             engine = self._require_engine()
 
         if cfg.db_backend != "sqlite":
+            logger.debug("当前数据库 backend=%s，无需 SQLite PRAGMA 配置", cfg.db_backend)
             return
         with engine.connect() as conn:
             conn.execute(text("PRAGMA journal_mode=WAL"))
             conn.execute(text("PRAGMA synchronous=NORMAL"))
+        logger.info("SQLite 数据库 PRAGMA 已配置")
 
     def switch(self, next_config: DatabaseRuntimeConfig) -> DatabaseRuntimeConfig:
         """验证并切换业务数据库。
 
         不做数据迁移；目标库会升级到当前 schema，然后成为新的 active database。
         """
+        logger.info("开始切换业务数据库 backend=%s", next_config.db_backend)
         next_engine = self._create_engine(next_config)
         try:
             self._verify_engine(next_engine, next_config)
             self._run_migrations(next_engine, next_config)
         except Exception:
             next_engine.dispose()
+            logger.exception("业务数据库切换验证失败 backend=%s", next_config.db_backend)
             raise
 
         next_sessionmaker = sessionmaker(
@@ -144,21 +153,25 @@ class DatabaseManager:
         if old_engine is not None:
             old_engine.dispose()
         self.configure_current_database()
+        logger.info("业务数据库切换完成 backend=%s", next_config.db_backend)
         return next_config
 
     def validate_target(self, target: DatabaseRuntimeConfig) -> None:
         """只验证目标数据库，不修改当前连接。"""
+        logger.info("开始验证目标数据库 backend=%s", target.db_backend)
         engine = self._create_engine(target)
         try:
             self._verify_engine(engine, target)
         finally:
             engine.dispose()
+        logger.info("目标数据库验证完成 backend=%s", target.db_backend)
 
     def _create_engine(self, cfg: DatabaseRuntimeConfig) -> Engine:
         if cfg.db_backend == "sqlite":
             path = self._sqlite_path(cfg)
             if not path.is_file():
                 raise DatabaseConnectionError(f"SQLite 数据库文件不存在：{path}")
+            logger.debug("创建 SQLite engine path=%s", path)
             engine = create_engine(
                 "sqlite://",
                 creator=lambda: self._connect_sqlite(cfg),
@@ -182,6 +195,7 @@ class DatabaseManager:
                 "PostgreSQL URL 必须以 postgresql:// 或 postgresql+psycopg2:// 开头"
             )
         try:
+            logger.debug("创建 PostgreSQL engine")
             engine = create_engine(
                 cfg.postgresql_url,
                 future=True,
@@ -223,6 +237,7 @@ class DatabaseManager:
                 conn.execute(text("SELECT 1"))
         except Exception as exc:
             raise DatabaseConnectionError(f"数据库连接失败：{exc}") from exc
+        logger.debug("数据库 SELECT 1 验证通过 backend=%s", cfg.db_backend)
 
         if cfg.db_backend == "postgresql":
             try:
@@ -230,6 +245,7 @@ class DatabaseManager:
                     conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             except Exception as exc:
                 raise DatabaseConnectionError(f"PostgreSQL pgvector 扩展不可用：{exc}") from exc
+            logger.debug("PostgreSQL pgvector 扩展验证通过")
 
     def _run_migrations(self, engine: Engine, cfg: DatabaseRuntimeConfig) -> None:
         from .migrations import run_migrations_for_engine

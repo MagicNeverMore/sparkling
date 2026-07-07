@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
 
+from ..logger import get_logger
 from .settings.runtime_config import connect_control_db
 
 SESSION_COOKIE_NAME = "sparkling_session"
@@ -21,6 +22,7 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 _hasher = PasswordHasher()
+logger = get_logger(__name__)
 
 
 class AuthError(RuntimeError):
@@ -71,6 +73,7 @@ def validate_email(email: str | None) -> str | None:
 def has_user() -> bool:
     with connect_control_db() as conn:
         row = conn.execute("SELECT 1 FROM auth_user WHERE id = 1").fetchone()
+    logger.debug("认证用户初始化状态 initialized=%s", row is not None)
     return row is not None
 
 
@@ -79,6 +82,7 @@ def get_user() -> AuthUser | None:
         row = conn.execute(
             "SELECT id, username, email, created_at, updated_at FROM auth_user WHERE id = 1"
         ).fetchone()
+    logger.debug("读取当前认证用户 found=%s", row is not None)
     return _row_to_user(row) if row is not None else None
 
 
@@ -90,6 +94,7 @@ def create_user(username: str, password: str, email: str | None) -> AuthUser:
     password_hash = _hasher.hash(password)
     with connect_control_db() as conn:
         if conn.execute("SELECT 1 FROM auth_user WHERE id = 1").fetchone() is not None:
+            logger.warning("创建用户失败：单用户已存在")
             raise AuthConflictError("用户已存在")
         conn.execute(
             """
@@ -101,7 +106,9 @@ def create_user(username: str, password: str, email: str | None) -> AuthUser:
         conn.commit()
     user = get_user()
     if user is None:
+        logger.error("用户创建后无法重新读取")
         raise AuthError("用户创建失败")
+    logger.info("本地用户已创建 username=%s has_email=%s", user.username, user.email is not None)
     return user
 
 
@@ -111,16 +118,21 @@ def authenticate(username: str, password: str) -> AuthUser:
             "SELECT id, username, password_hash, email, created_at, updated_at FROM auth_user WHERE id = 1"
         ).fetchone()
     if row is None or row["username"] != username:
+        logger.warning("用户登录失败 username=%s reason=not_found_or_mismatch", username)
         raise AuthError("用户名或密码错误")
     try:
         ok = _hasher.verify(row["password_hash"], password)
     except (VerifyMismatchError, VerificationError) as exc:
+        logger.warning("用户登录失败 username=%s reason=password_verify_failed", username)
         raise AuthError("用户名或密码错误") from exc
     if not ok:
+        logger.warning("用户登录失败 username=%s reason=password_mismatch", username)
         raise AuthError("用户名或密码错误")
     if _hasher.check_needs_rehash(row["password_hash"]):
         _update_password_hash(password)
-    return _row_to_user(row)
+    user = _row_to_user(row)
+    logger.info("用户登录成功 username=%s", user.username)
+    return user
 
 
 def create_session(user_id: int) -> tuple[str, str]:
@@ -138,6 +150,7 @@ def create_session(user_id: int) -> tuple[str, str]:
             (token_hash, user_id, _iso(now), _iso(expires)),
         )
         conn.commit()
+    logger.info("认证 session 已创建 user_id=%s expires_at=%s", user_id, _iso(expires))
     return token, _iso(expires)
 
 
@@ -156,6 +169,7 @@ def get_user_by_session(token: str | None) -> AuthUser | None:
             """,
             (token_hash, now),
         ).fetchone()
+    logger.debug("通过 session 查询用户 found=%s", row is not None)
     return _row_to_user(row) if row is not None else None
 
 
@@ -165,6 +179,7 @@ def delete_session(token: str | None) -> None:
     with connect_control_db() as conn:
         conn.execute("DELETE FROM auth_session WHERE token_hash = ?", (_hash_token(token),))
         conn.commit()
+    logger.info("认证 session 已删除")
 
 
 def update_user(
@@ -194,7 +209,14 @@ def update_user(
         conn.commit()
     user = get_user()
     if user is None:
+        logger.error("用户更新后无法重新读取")
         raise AuthError("用户不存在")
+    logger.info(
+        "用户资料已更新 username=%s has_email=%s password_changed=%s",
+        user.username,
+        user.email is not None,
+        bool(password),
+    )
     return user
 
 
@@ -205,6 +227,7 @@ def _update_password_hash(password: str) -> None:
             (_hasher.hash(password), _now_iso()),
         )
         conn.commit()
+    logger.info("用户密码 hash 已重新计算")
 
 
 def _row_to_user(row) -> AuthUser:  # noqa: ANN001

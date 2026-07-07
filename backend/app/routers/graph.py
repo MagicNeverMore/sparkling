@@ -8,9 +8,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..db import get_session
+from ..logger import get_logger
 from ..models import ThoughtAtom, ThoughtLink
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 class GraphNode(BaseModel):
@@ -62,4 +64,5 @@ async def get_graph(session: Session = Depends(get_session)) -> GraphOut:
         if lk.from_atom_id in valid_ids and lk.to_atom_id in valid_ids
     ]
 
+    logger.debug("图谱数据已生成 nodes=%d edges=%d", len(nodes), len(edges))
     return GraphOut(nodes=nodes, edges=edges)

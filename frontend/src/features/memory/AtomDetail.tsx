@@ -7,6 +7,7 @@ import { ConflictError } from '../../lib/mock'
 import { formatDateTime } from '../../lib/time'
 import { useSparklingStore } from '../../lib/store'
 import { useI18n } from '../../lib/I18nProvider'
+import { MAX_ATOM_CONTENT_CHARS } from '../../lib/limits'
 
 export default function AtomDetail() {
   const { lang, t } = useI18n()
@@ -58,6 +59,10 @@ export default function AtomDetail() {
     const next = draft.trim()
     if (!next) {
       show(t('atom.contentRequired'), 'warning')
+      return
+    }
+    if (next.length > MAX_ATOM_CONTENT_CHARS) {
+      show(t('common.tooLong', { max: MAX_ATOM_CONTENT_CHARS }), 'warning')
       return
     }
     if (next === atom.content) {
@@ -145,6 +150,7 @@ export default function AtomDetail() {
               ref={textareaRef}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
+              maxLength={MAX_ATOM_CONTENT_CHARS}
               className="min-h-48 w-full resize-none bg-transparent text-2xl leading-10 text-slate-950 outline-none dark:text-slate-100"
             />
           ) : (

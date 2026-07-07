@@ -5,6 +5,7 @@ import { api } from '../../lib/api'
 import { type SearchResultMock } from '../../lib/mock'
 import { useSparklingStore } from '../../lib/store'
 import { useI18n } from '../../lib/I18nProvider'
+import { MAX_SEARCH_QUERY_CHARS } from '../../lib/limits'
 
 // 后端 /api/search 返回的原始类型
 interface SearchRaw {
@@ -64,6 +65,7 @@ export default function Search() {
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         placeholder={t('search.placeholder')}
+        maxLength={MAX_SEARCH_QUERY_CHARS}
         className="w-full rounded-xl border border-slate-200 bg-white px-4 py-4 text-lg text-slate-950 shadow-sm outline-none placeholder:text-slate-400 focus:border-violet-400 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:shadow-none dark:placeholder:text-slate-500"
       />
       <div className="mt-5">

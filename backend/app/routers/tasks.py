@@ -9,10 +9,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..db import get_session
+from ..logger import get_logger
 from ..models import UserTask
 from ..time_utils import utc_isoformat
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 class TaskCreate(BaseModel):
@@ -65,6 +67,7 @@ def _to_out(task: UserTask) -> TaskOut:
 @router.get("", response_model=list[TaskOut])
 def list_tasks(session: Session = Depends(get_session)) -> list[TaskOut]:
     tasks = session.query(UserTask).order_by(UserTask.created_at.desc()).all()
+    logger.debug("任务列表已读取 count=%d", len(tasks))
     return [_to_out(t) for t in tasks]
 
 
@@ -80,6 +83,7 @@ def create_task(body: TaskCreate, session: Session = Depends(get_session)) -> Ta
     session.add(task)
     session.commit()
     session.refresh(task)
+    logger.info("任务已创建 task_id=%s category=%s due_date=%s", task.id, task.category, task.due_date)
     return _to_out(task)
 
 
@@ -104,10 +108,12 @@ def update_task(task_id: str, body: TaskPatch, session: Session = Depends(get_se
     if body.completed is not None and body.completed != task.completed:
         task.completed = body.completed
         task.completed_at = datetime.utcnow() if body.completed else None
+        logger.info("任务完成状态已变更 task_id=%s completed=%s", task.id, task.completed)
 
     task.updated_at = datetime.utcnow()
     session.commit()
     session.refresh(task)
+    logger.info("任务已更新 task_id=%s", task.id)
     return _to_out(task)
 
 
@@ -118,3 +124,4 @@ def delete_task(task_id: str, session: Session = Depends(get_session)) -> None:
         raise HTTPException(status_code=404, detail="Task not found")
     session.delete(task)
     session.commit()
+    logger.info("任务已删除 task_id=%s", task_id)

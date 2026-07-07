@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useI18n } from '../../lib/I18nProvider'
+import { MAX_ATOM_CONTENT_CHARS } from '../../lib/limits'
 
 interface Props {
   onSubmit: (content: string) => Promise<void>
@@ -21,6 +22,7 @@ export default function QuickInput({ onSubmit }: Props) {
   const submit = async () => {
     const content = value.trim()
     if (!content || submitting) return
+    if (content.length > MAX_ATOM_CONTENT_CHARS) return
     setSubmitting(true)
     await onSubmit(content)
     setValue('')
@@ -43,11 +45,12 @@ export default function QuickInput({ onSubmit }: Props) {
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={t('quick.placeholder')}
+        maxLength={MAX_ATOM_CONTENT_CHARS}
         rows={2}
         className="max-h-60 min-h-20 w-full resize-none bg-transparent text-base leading-7 text-slate-950 outline-none placeholder:text-slate-400 dark:text-slate-100 dark:placeholder:text-slate-500"
       />
       <div className="mt-3 flex items-center justify-between">
-        <span className="text-xs text-slate-500">Cmd+Enter</span>
+        <span className="text-xs text-slate-500">Cmd+Enter · {value.length}/{MAX_ATOM_CONTENT_CHARS}</span>
         <button
           type="button"
           onClick={() => void submit()}

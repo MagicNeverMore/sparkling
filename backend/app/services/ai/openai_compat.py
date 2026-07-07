@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit, urlunsplit
 
+from ...logger import get_logger
+
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+logger = get_logger(__name__)
 
 
 def _with_default_scheme(value: str) -> str:
@@ -37,5 +40,7 @@ def normalize_base_url(base_url: str | None) -> str | None:
     value = _with_default_scheme(base_url.strip().rstrip("/"))
     parsed = urlsplit(value)
     if parsed.scheme and parsed.netloc and _should_append_v1(value):
+        logger.debug("OpenAI-compatible base_url 已补 /v1 scheme=%s host=%s", parsed.scheme, parsed.hostname)
         return urlunsplit((parsed.scheme, parsed.netloc, "/v1", parsed.query, parsed.fragment))
+    logger.debug("OpenAI-compatible base_url 保持原路径 scheme=%s host=%s", parsed.scheme, parsed.hostname)
     return value
