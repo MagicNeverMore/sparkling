@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import socket
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
+import anyio
+
 from ..db import SessionLocal
 from ..logger import get_logger
-from ..models import Settings, TaskQueue
+from ..models import Settings, TaskQueue, TrendRun
 from ..services.memory.cleanup import purge_expired_deleted_atoms
 from ..services import task_queue as tq
 from ..services.memory.embedding import mark_atom_embedding_error, sync_atom_embedding
@@ -25,11 +30,23 @@ from ..services.ws_manager import manager
 
 logger = get_logger(__name__)
 
-MAX_ATTEMPTS = 3
 # 无新任务时的兜底轮询间隔（秒），防止 wakeup event 丢失
 POLL_INTERVAL = 30.0
 CLEANUP_INTERVAL = timedelta(hours=24)
 TREND_SCHEDULER_INTERVAL = timedelta(minutes=1)
+GLOBAL_CONCURRENCY_LIMIT = 3
+TASK_TYPE_CONCURRENCY_LIMITS = {
+    "embed": 2,
+    "link_discover": 1,
+    "trend_collect": 1,
+}
+TASK_TIMEOUT_SECONDS = {
+    "embed": 180,
+    "link_discover": 60,
+    "trend_collect": 1800,
+}
+TASK_LEASE_GRACE_SECONDS = 60
+SETTINGS_NOT_READY_RETRY_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -99,15 +116,35 @@ _HANDLERS = {
 }
 
 
-def _claim_task() -> _ClaimedTask | None:
+def _claim_task(
+    *,
+    worker_id: str,
+    blocked_task_types: set[str] | None = None,
+    excluded_task_ids: set[str] | None = None,
+) -> _ClaimedTask | None:
     with SessionLocal() as session:
-        task = tq.claim_next(session)
+        task = tq.claim_next(
+            session,
+            worker_id=worker_id,
+            lease_seconds=_task_lease_seconds("unknown"),
+            lease_seconds_by_type={
+                task_type: _task_lease_seconds(task_type)
+                for task_type in TASK_TIMEOUT_SECONDS
+            },
+            blocked_task_types=blocked_task_types,
+            excluded_task_ids=excluded_task_ids,
+        )
         if task is None:
+            return None
+        try:
+            payload = json.loads(task.payload or "{}")
+        except json.JSONDecodeError as exc:
+            tq.mark_failed(session, task.id, f"任务 payload JSON 无效: {exc}")
             return None
         return _ClaimedTask(
             id=task.id,
             task_type=task.task_type,
-            payload=json.loads(task.payload or "{}"),
+            payload=payload,
         )
 
 
@@ -127,8 +164,14 @@ def _defer_task_until_settings_ready(task_id: str) -> None:
         task = session.get(TaskQueue, task_id)
         if task is None:
             return
+        now = datetime.utcnow()
         task.status = "pending"
         task.attempts = max(0, task.attempts - 1)
+        task.available_at = now + timedelta(seconds=SETTINGS_NOT_READY_RETRY_SECONDS)
+        task.locked_by = None
+        task.locked_at = None
+        task.lease_until = None
+        task.updated_at = now
         session.commit()
 
 
@@ -141,7 +184,162 @@ def _mark_task_failed(task: _ClaimedTask, exc: Exception) -> None:
     with SessionLocal() as session:
         if task.task_type == "embed" and task.payload.get("atom_id"):
             mark_atom_embedding_error(session, task.payload["atom_id"], str(exc))
-        tq.mark_failed(session, task.id, str(exc), MAX_ATTEMPTS)
+        status = tq.mark_failed(session, task.id, str(exc))
+        _sync_trend_run_after_task_failure(session, task, str(exc), status)
+
+
+def _mark_task_released(task: _ClaimedTask, reason: str) -> None:
+    with SessionLocal() as session:
+        tq.release_running(session, task.id, reason)
+        _sync_trend_run_after_task_failure(session, task, reason, "pending")
+
+
+def _sync_trend_run_after_task_failure(
+    session,  # noqa: ANN001
+    task: _ClaimedTask,
+    error: str,
+    task_status: str | None,
+) -> None:
+    if task.task_type != "trend_collect":
+        return
+    run_id = task.payload.get("run_id")
+    if not run_id:
+        return
+    run = session.get(TrendRun, run_id)
+    if run is None:
+        return
+    now = datetime.utcnow()
+    if task_status == "failed":
+        run.status = "failed"
+        run.finished_at = now
+    else:
+        run.status = "pending"
+    run.error = error[:2000]
+    run.updated_at = now
+    session.commit()
+
+
+async def _execute_claimed_task(task: _ClaimedTask) -> bool:
+    handler = _HANDLERS.get(task.task_type)
+    if handler is None:
+        raise ValueError(f"未知任务类型: {task.task_type}")
+
+    settings = None
+    if task.task_type in {"embed", "link_discover"}:
+        settings = _load_worker_settings()
+        if settings is None:
+            _defer_task_until_settings_ready(task.id)
+            logger.debug("Settings 未配置，任务 %s 本轮跳过", task.id)
+            return False
+
+    if task.task_type == "embed" and settings is not None:
+        await _handle_embed(task.payload, settings.embedding)
+    elif task.task_type == "link_discover" and settings is not None:
+        await _handle_link_discover(task.payload, settings.link)
+    elif task.task_type == "trend_collect":
+        await _handle_trend_collect(task.payload)
+    return True
+
+
+async def _run_claimed_task(task: _ClaimedTask) -> None:
+    cancelled_exc = anyio.get_cancelled_exc_class()
+    timeout_seconds = _task_timeout_seconds(task.task_type)
+    try:
+        with anyio.fail_after(timeout_seconds):
+            completed = await _execute_claimed_task(task)
+        if completed:
+            _mark_task_done(task.id)
+    except TimeoutError:
+        message = f"任务执行超时（>{timeout_seconds}s）"
+        logger.warning("任务 %s 超时: %s", task.id, message)
+        _mark_task_failed(task, TimeoutError(message))
+    except cancelled_exc:
+        _mark_task_released(task, "worker cancelled")
+        raise
+    except Exception as exc:
+        logger.exception("任务 %s 执行失败: %s", task.id, exc)
+        _mark_task_failed(task, exc)
+
+
+async def _drain_pending_tasks_once(worker_id: str | None = None) -> int:
+    """消费当前可处理任务；配置未就绪的 AI 任务只跳过本轮，不能阻塞 Trend。"""
+    worker_id = worker_id or _worker_id()
+    deferred_until_settings_ready: set[str] = set()
+    processed = 0
+    while True:
+        task = _claim_task(worker_id=worker_id, excluded_task_ids=deferred_until_settings_ready)
+        if task is None:
+            break
+        await _run_claimed_task(task)
+        with SessionLocal() as session:
+            current = session.get(TaskQueue, task.id)
+            if current is not None and current.status == "pending":
+                deferred_until_settings_ready.add(task.id)
+            else:
+                processed += 1
+    return processed
+
+
+def _worker_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4()}"
+
+
+def _task_timeout_seconds(task_type: str) -> int:
+    return TASK_TIMEOUT_SECONDS.get(task_type, 120)
+
+
+def _task_lease_seconds(task_type: str) -> int:
+    return _task_timeout_seconds(task_type) + TASK_LEASE_GRACE_SECONDS
+
+
+def _blocked_task_types(active_counts: dict[str, int]) -> set[str]:
+    blocked = set()
+    for task_type, limit in TASK_TYPE_CONCURRENCY_LIMITS.items():
+        if active_counts.get(task_type, 0) >= limit:
+            blocked.add(task_type)
+    return blocked
+
+
+def _reclaim_expired_task_leases() -> int:
+    with SessionLocal() as session:
+        return tq.reclaim_expired_leases(session)
+
+
+async def _start_available_tasks(
+    task_group: anyio.abc.TaskGroup,
+    *,
+    worker_id: str,
+    active_counts: dict[str, int],
+    active_task_ids: set[str],
+    event: asyncio.Event,
+) -> int:
+    started = 0
+    while len(active_task_ids) < GLOBAL_CONCURRENCY_LIMIT:
+        task = _claim_task(
+            worker_id=worker_id,
+            blocked_task_types=_blocked_task_types(active_counts),
+        )
+        if task is None:
+            break
+        active_task_ids.add(task.id)
+        active_counts[task.task_type] = active_counts.get(task.task_type, 0) + 1
+        task_group.start_soon(_run_and_track_task, task, active_counts, active_task_ids, event)
+        started += 1
+    return started
+
+
+async def _run_and_track_task(
+    task: _ClaimedTask,
+    active_counts: dict[str, int],
+    active_task_ids: set[str],
+    event: asyncio.Event,
+) -> None:
+    try:
+        await _run_claimed_task(task)
+    finally:
+        active_task_ids.discard(task.id)
+        active_counts[task.task_type] = max(0, active_counts.get(task.task_type, 1) - 1)
+        event.set()
 
 
 async def _worker_loop() -> None:
@@ -153,65 +351,49 @@ async def _worker_loop() -> None:
     - Settings 未配置时保持任务 pending，等用户配置后下次唤醒处理
     """
     event = tq.get_wakeup_event()
-    logger.info("Sparkling worker 已启动")
+    worker_id = _worker_id()
+    logger.info("Sparkling worker 已启动 worker_id=%s", worker_id)
     last_cleanup_at: datetime | None = None
     last_trend_schedule_check_at: datetime | None = None
+    active_counts: dict[str, int] = {}
+    active_task_ids: set[str] = set()
 
-    while True:
-        now = datetime.utcnow()
-        if last_cleanup_at is None or now - last_cleanup_at >= CLEANUP_INTERVAL:
-            with SessionLocal() as session:
-                purge_expired_deleted_atoms(session)
-            last_cleanup_at = now
-
-        if last_trend_schedule_check_at is None or now - last_trend_schedule_check_at >= TREND_SCHEDULER_INTERVAL:
-            with SessionLocal() as session:
-                settings = session.get(Settings, 1)
-                if settings is not None:
-                    run = maybe_enqueue_due_trend_run(session, settings, now)
-                    if run is not None:
-                        logger.info("Trend 定时任务已入队，run_id=%s", run.id)
-            last_trend_schedule_check_at = now
-
-        try:
-            await asyncio.wait_for(event.wait(), timeout=POLL_INTERVAL)
-        except asyncio.TimeoutError:
-            pass
-        event.clear()
-
-        # 持续消费，直到队列空
+    async with anyio.create_task_group() as task_group:
         while True:
-            task = _claim_task()
-            if task is None:
-                break
-
-            handler = _HANDLERS.get(task.task_type)
-            if handler is None:
+            now = datetime.utcnow()
+            if last_cleanup_at is None or now - last_cleanup_at >= CLEANUP_INTERVAL:
                 with SessionLocal() as session:
-                    tq.mark_failed(session, task.id, f"未知任务类型: {task.task_type}", MAX_ATTEMPTS)
+                    purge_expired_deleted_atoms(session)
+                last_cleanup_at = now
+
+            reclaimed = _reclaim_expired_task_leases()
+            if reclaimed:
+                logger.info("已回收过期任务租约 %d 条", reclaimed)
+
+            if last_trend_schedule_check_at is None or now - last_trend_schedule_check_at >= TREND_SCHEDULER_INTERVAL:
+                with SessionLocal() as session:
+                    settings = session.get(Settings, 1)
+                    if settings is not None:
+                        run = maybe_enqueue_due_trend_run(session, settings, now)
+                        if run is not None:
+                            logger.info("Trend 定时任务已入队，run_id=%s", run.id)
+                last_trend_schedule_check_at = now
+
+            started = await _start_available_tasks(
+                task_group,
+                worker_id=worker_id,
+                active_counts=active_counts,
+                active_task_ids=active_task_ids,
+                event=event,
+            )
+            if started:
                 continue
 
-            settings = None
-            if task.task_type in {"embed", "link_discover"}:
-                # 每次任务都重新读 settings，支持热更新 AI provider 配置。
-                # 只保留不可变快照，外部 API 调用期间不持有数据库 Session。
-                settings = _load_worker_settings()
-                if settings is None:
-                    _defer_task_until_settings_ready(task.id)
-                    logger.debug("Settings 未配置，任务 %s 保持 pending", task.id)
-                    break
-
             try:
-                if task.task_type == "embed" and settings is not None:
-                    await _handle_embed(task.payload, settings.embedding)
-                elif task.task_type == "link_discover" and settings is not None:
-                    await _handle_link_discover(task.payload, settings.link)
-                elif task.task_type == "trend_collect":
-                    await _handle_trend_collect(task.payload)
-                _mark_task_done(task.id)
-            except Exception as exc:
-                logger.exception("任务 %s 执行失败: %s", task.id, exc)
-                _mark_task_failed(task, exc)
+                await asyncio.wait_for(event.wait(), timeout=POLL_INTERVAL)
+            except asyncio.TimeoutError:
+                pass
+            event.clear()
 
 
 async def start_worker() -> asyncio.Task:

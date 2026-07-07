@@ -72,7 +72,7 @@ class ThoughtLink(Base):
 
 
 class TaskQueue(Base):
-    """SQLite 任务队列，替代 Redis/ARQ。"""
+    """本地任务队列，替代 Redis/ARQ。"""
 
     __tablename__ = "task_queue"
 
@@ -81,6 +81,13 @@ class TaskQueue(Base):
     payload: Mapped[str | None] = mapped_column(Text)  # JSON
     status: Mapped[str] = mapped_column(String, default="pending")  # pending|running|done|failed
     attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime | None] = mapped_column(DateTime, default=_now)
+    locked_by: Mapped[str | None] = mapped_column(String)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime)
+    resource_key: Mapped[str | None] = mapped_column(String)
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
