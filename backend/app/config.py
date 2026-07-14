@@ -1,16 +1,13 @@
 """应用配置：环境变量层（与数据库 settings 表区分）。
 
-支持两种数据库后端：
-- SQLite（默认）：通过 SPARKLING_DB_PATH 指定文件路径
-- PostgreSQL：通过 SPARKLING_POSTGRESQL_URL 指定连接串，优先级高于 SQLite
+业务数据库选择保存在固定 control SQLite 中，环境变量只负责提供首次启动的
+默认 SQLite 文件路径，以及服务监听配置。PostgreSQL URL 不再通过 .env 注入。
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
-
-from pydantic import Field, field_validator, model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .logger import get_logger
@@ -27,9 +24,7 @@ class AppConfig(BaseSettings):
         extra="ignore",
     )
 
-    db_backend: Literal["sqlite", "postgresql"] | None = Field(default=None)
-    db_path: str = ""
-    postgresql_url: str | None = None
+    db_path: str = str(BACKEND_DIR / "sparkling.db")
     host: str = "127.0.0.1"
     port: int = 8000
     dev_origin: str = "http://localhost:5173"
@@ -50,44 +45,17 @@ class AppConfig(BaseSettings):
 
     @model_validator(mode="after")
     def validate_db_config(self):
-        """至少需要 SQLite 路径或 PostgreSQL URL 之一，并校验显式后端。"""
-        if self.db_backend == "postgresql" and not self.postgresql_url:
-            raise ValueError("使用 PostgreSQL 时必须配置 SPARKLING_POSTGRESQL_URL")
-        if self.effective_db_backend == "sqlite" and not self.db_path:
-            raise ValueError(
-                "使用 SQLite 时必须配置 SPARKLING_DB_PATH（SQLite 文件路径）"
-            )
+        """首次启动必须有默认 SQLite 文件路径。"""
+        if not self.db_path:
+            raise ValueError("必须配置 SPARKLING_DB_PATH（SQLite 文件路径）")
         return self
-
-    @property
-    def effective_db_backend(self) -> Literal["sqlite", "postgresql"]:
-        """实际使用的数据库后端；兼容旧配置中只设置 PostgreSQL URL 的情况。"""
-        if self.db_backend:
-            return self.db_backend
-        if self.postgresql_url:
-            return "postgresql"
-        return "sqlite"
-
-    @property
-    def uses_postgresql(self) -> bool:
-        """是否使用 PostgreSQL 后端。"""
-        return self.effective_db_backend == "postgresql"
-
-    @property
-    def sqlalchemy_url(self) -> str:
-        if self.uses_postgresql and self.postgresql_url:
-            return self.postgresql_url
-        if self.effective_db_backend == "sqlite" and self.db_path:
-            return f"sqlite:///{self.db_path}"
-        # 不应到达（model_validator 已拦截），防御性返回
-        raise RuntimeError("未配置数据库连接")
 
 
 config = AppConfig()
 logger.info(
-    "应用配置已加载 host=%s port=%s db_backend=%s dev_origin=%s",
+    "应用配置已加载 host=%s port=%s default_db_path=%s dev_origin=%s",
     config.host,
     config.port,
-    config.effective_db_backend,
+    config.db_path,
     config.dev_origin,
 )

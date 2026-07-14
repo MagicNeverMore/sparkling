@@ -96,13 +96,12 @@ All optional, defaults suitable for local Docker deployment:
 | Variable | Default | Description |
 |---|---|---|
 | `SPARKLING_PORT` | `3721` | Server listen port |
-| `SPARKLING_DB_BACKEND` | `sqlite` | Database backend: `sqlite` or `postgresql` |
-| `SPARKLING_DB_PATH` | `/data/sparkling.db` | SQLite file path |
-| `SPARKLING_POSTGRESQL_URL` | (empty) | PostgreSQL connection string, e.g. `postgresql://user:pass@host:5432/sparkling` |
+| `SPARKLING_DB_PATH` | `/data/sparkling.db` | Default SQLite file path used only when control DB has no database config yet |
+| `SPARKLING_CONTROL_DB_PATH` | `/data/control.db` | Fixed local SQLite file for database selection, auth user, and sessions |
 | `SPARKLING_HOST` | `0.0.0.0` | Listen address (`0.0.0.0` required inside Docker) |
 | `SPARKLING_DEV_ORIGIN` | (empty) | CORS origin for frontend dev server |
 
-Modify the corresponding `environment` fields in `docker-compose.yml`. You can also switch between SQLite/PostgreSQL on the **Settings → Database** page; a backend restart is required after saving.
+Modify the corresponding `environment` fields in `docker-compose.yml`. Database backend selection is stored in the fixed control SQLite database. Switch between SQLite/PostgreSQL on the **Settings → Database** page; PostgreSQL URLs are saved there, not in `.env`.
 
 ## AI Provider Configuration
 
