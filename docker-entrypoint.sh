@@ -4,17 +4,14 @@ set -e
 
 echo "=== Sparkling Docker Entrypoint ==="
 
-# 1. SQLite 首启时创建空文件（db.py 要求 mode=rw，文件必须预先存在）
-if [ "${SPARKLING_DB_BACKEND:-sqlite}" = "sqlite" ]; then
-    DATA_DIR="$(dirname "$SPARKLING_DB_PATH")"
-    mkdir -p "$DATA_DIR"
+# 1. 首次启动时创建默认 SQLite 文件。
+# 实际业务数据库配置从 control DB 读取；PostgreSQL 通过 Settings 页面写入 control DB。
+DATA_DIR="$(dirname "$SPARKLING_DB_PATH")"
+mkdir -p "$DATA_DIR"
 
-    if [ ! -f "$SPARKLING_DB_PATH" ]; then
-        echo "[entrypoint] 首次启动，创建数据库文件：$SPARKLING_DB_PATH"
-        touch "$SPARKLING_DB_PATH"
-    fi
-else
-    echo "[entrypoint] 使用 PostgreSQL"
+if [ ! -f "$SPARKLING_DB_PATH" ]; then
+    echo "[entrypoint] 首次启动，创建默认 SQLite 数据库文件：$SPARKLING_DB_PATH"
+    touch "$SPARKLING_DB_PATH"
 fi
 
 # 2. 运行 Alembic 数据库迁移

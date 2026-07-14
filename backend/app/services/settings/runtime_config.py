@@ -58,16 +58,16 @@ def get_database_config() -> dict[str, str | bool | None]:
 
 
 def load_database_config() -> DatabaseRuntimeConfig:
-    """从 control SQLite 读取数据库配置；首次启动时从环境变量初始化。"""
+    """从 control SQLite 读取数据库配置；首次启动时写入默认 SQLite 配置。"""
     _ensure_control_db()
     with _connect() as conn:
         row = conn.execute(
             "SELECT db_backend, db_path, postgresql_url FROM database_config WHERE id = 1"
         ).fetchone()
     if row is None:
-        seeded = _config_from_env()
+        seeded = _default_sqlite_config()
         save_database_config(seeded)
-        logger.info("control DB 未找到数据库配置，已从环境初始化 backend=%s", seeded.db_backend)
+        logger.info("control DB 未找到数据库配置，已写入默认 SQLite 配置 path=%s", seeded.db_path)
         return seeded
     runtime_config = DatabaseRuntimeConfig(
         db_backend=row["db_backend"],
@@ -131,11 +131,12 @@ def build_database_config(
     return runtime_config
 
 
-def _config_from_env() -> DatabaseRuntimeConfig:
+def _default_sqlite_config() -> DatabaseRuntimeConfig:
+    """首次启动默认使用 SQLite；PostgreSQL 只通过 Settings 写入 control DB。"""
     return DatabaseRuntimeConfig(
-        db_backend=config.effective_db_backend,
+        db_backend="sqlite",
         db_path=config.db_path or None,
-        postgresql_url=config.postgresql_url or None,
+        postgresql_url=None,
     )
 
 

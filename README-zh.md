@@ -96,13 +96,12 @@ docker compose restart
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `SPARKLING_PORT` | `3721` | 服务监听端口 |
-| `SPARKLING_DB_BACKEND` | `sqlite` | 数据库后端：`sqlite` 或 `postgresql` |
-| `SPARKLING_DB_PATH` | `/data/sparkling.db` | SQLite 文件路径 |
-| `SPARKLING_POSTGRESQL_URL` | (空) | PostgreSQL 连接串，例如 `postgresql://user:pass@host:5432/sparkling` |
+| `SPARKLING_DB_PATH` | `/data/sparkling.db` | 默认 SQLite 文件路径，仅在 control DB 还没有数据库配置时使用 |
+| `SPARKLING_CONTROL_DB_PATH` | `/data/control.db` | 固定本地 SQLite 文件，用于保存数据库选择、认证用户和 session |
 | `SPARKLING_HOST` | `0.0.0.0` | 监听地址（Docker 内需要 `0.0.0.0`） |
 | `SPARKLING_DEV_ORIGIN` | (空) | 前端 dev server 的 CORS origin |
 
-在 `docker-compose.yml` 中修改对应 `environment` 字段。也可以在页面 **Settings → 数据库** 中切换 SQLite/PostgreSQL；保存后需要重启后端服务才会生效。
+在 `docker-compose.yml` 中修改对应 `environment` 字段。数据库后端选择保存在固定 control SQLite 中；请在页面 **Settings → 数据库** 中切换 SQLite/PostgreSQL，PostgreSQL URL 也保存在那里，不再写入 `.env`。
 
 ## AI Provider 配置
 
