@@ -12,6 +12,27 @@ interface Props {
   onNodeSelect?: (id: string | null) => void
 }
 
+type LayoutPhase = 'full' | 'incremental'
+
+interface GraphPosition {
+  x: number
+  y: number
+}
+
+interface LabelMetrics {
+  text: string
+  footprintRadius: number
+}
+
+const LABEL_MAX_CHARS = 10
+const LABEL_FONT_SIZE = 10
+const LABEL_LINE_HEIGHT = 12
+const LABEL_OFFSET_Y = 3
+const LABEL_COLLISION_PADDING = 10
+const GRAPH_PADDING = 72
+const FULL_LAYOUT_ITERATIONS = 500
+const INCREMENTAL_LAYOUT_ITERATIONS = 140
+
 // 多色调色板，颜色由 atom id hash 决定
 const PALETTE = [
   '#22d3ee', // cyan
@@ -46,7 +67,47 @@ function getNodeFill(atomId: string, degree: number): string {
 
 const truncateLabel = (content: string): string => {
   const chars = Array.from(content.trim())
-  return chars.length > 10 ? `${chars.slice(0, 10).join('')}…` : chars.join('')
+  return chars.length > LABEL_MAX_CHARS
+    ? `${chars.slice(0, LABEL_MAX_CHARS).join('')}…`
+    : chars.join('')
+}
+
+let labelMeasureContext: CanvasRenderingContext2D | null | undefined
+
+const measureLabelWidth = (text: string): number => {
+  if (labelMeasureContext === undefined) {
+    labelMeasureContext = document.createElement('canvas').getContext('2d')
+    if (labelMeasureContext) {
+      labelMeasureContext.font = `${LABEL_FONT_SIZE}px system-ui, sans-serif`
+    }
+  }
+
+  if (labelMeasureContext) return labelMeasureContext.measureText(text).width
+
+  return Array.from(text).reduce((width, char) => (
+    width + ((char.codePointAt(0) ?? 0) <= 0xff ? LABEL_FONT_SIZE * 0.58 : LABEL_FONT_SIZE)
+  ), 0)
+}
+
+const getLabelMetrics = (content: string, degree: number): LabelMetrics => {
+  const text = truncateLabel(content)
+  const width = Math.max(measureLabelWidth(text), LABEL_FONT_SIZE)
+  const dotRadius = getDotRadius(degree)
+  const labelBottom = dotRadius + LABEL_OFFSET_Y + LABEL_LINE_HEIGHT
+  const footprintRadius = Math.hypot(width / 2, labelBottom) + LABEL_COLLISION_PADDING
+
+  return { text, footprintRadius }
+}
+
+const clamp = (value: number, min: number, max: number): number => (
+  Math.min(Math.max(value, min), max)
+)
+
+const getStableJitter = (id: string): GraphPosition => {
+  const hash = hashId(id)
+  const angle = (hash % 360) * (Math.PI / 180)
+  const radius = 48 + (hash % 36)
+  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius }
 }
 
 const getLinkedIds = (atomId: string, links: LinkMock[]) => {
@@ -72,11 +133,19 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
   const graphRef = useRef<Graph | null>(null)
   const graphLifecycleRef = useRef(0)
   const graphTaskQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const topologySignatureRef = useRef<string | null>(null)
+  const labelSignatureRef = useRef<string | null>(null)
+  const manualPositionsRef = useRef(new Map<string, GraphPosition>())
 
-  // Ref 存储最新的 degree map，供 G6 样式函数（在 init 闭包中）使用
+  // Ref 存储最新布局信息，供 G6 初始化闭包中的样式和 force 回调使用
   const degreeMapRef = useRef(new Map<string, number>())
+  const labelMetricsMapRef = useRef(new Map<string, LabelMetrics>())
+  const edgeEndpointsRef = useRef(new Map<string, readonly [string, string]>())
   const onNodeSelectRef = useRef(onNodeSelect)
   const selectedIdRef = useRef(selectedId)
+  const focusIdRef = useRef<string | null>(null)
+  const hoveredIdRef = useRef<string | null>(null)
+  const searchMatchIdRef = useRef<string | null>(null)
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 首次渲染标记，用于初始缩放处理
   const isFirstRenderRef = useRef(true)
@@ -113,6 +182,31 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
   }, [visibleLinks])
 
   useEffect(() => { degreeMapRef.current = degreeMap }, [degreeMap])
+  useEffect(() => { focusIdRef.current = focusId }, [focusId])
+
+  const labelMetricsMap = useMemo(() => new Map(
+    atoms.map((atom) => [atom.id, getLabelMetrics(atom.content, degreeMap.get(atom.id) ?? 0)]),
+  ), [atoms, degreeMap])
+
+  const edgeEndpoints = useMemo(() => new Map(
+    visibleLinks.map((link) => [link.id, [link.fromAtomId, link.toAtomId] as const]),
+  ), [visibleLinks])
+
+  const topologySignature = useMemo(() => {
+    const nodeIds = atoms.map((atom) => atom.id).sort()
+    const edges = visibleLinks
+      .map((link) => `${link.id}:${link.fromAtomId}:${link.toAtomId}`)
+      .sort()
+    return `${nodeIds.join(',')}|${edges.join(',')}`
+  }, [atoms, visibleLinks])
+
+  const labelSignature = useMemo(() => atoms
+    .map((atom) => `${atom.id}:${labelMetricsMap.get(atom.id)?.text ?? ''}`)
+    .sort()
+    .join('|'), [atoms, labelMetricsMap])
+
+  useEffect(() => { labelMetricsMapRef.current = labelMetricsMap }, [labelMetricsMap])
+  useEffect(() => { edgeEndpointsRef.current = edgeEndpoints }, [edgeEndpoints])
 
   const clearTooltipTimer = () => {
     if (tooltipTimerRef.current) {
@@ -146,6 +240,64 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       })
   }, [isActiveGraph])
 
+  const createLayoutOptions = useCallback((phase: LayoutPhase) => ({
+    type: 'd3-force' as const,
+    link: {
+      distance: (edge: { id: unknown }) => {
+        const endpoints = edgeEndpointsRef.current.get(String(edge.id))
+        if (!endpoints) return 160
+        const [sourceId, targetId] = endpoints
+        const sourceRadius = labelMetricsMapRef.current.get(sourceId)?.footprintRadius ?? 48
+        const targetRadius = labelMetricsMapRef.current.get(targetId)?.footprintRadius ?? 48
+        return clamp(sourceRadius + targetRadius + 40, 140, 220)
+      },
+      strength: 0.72,
+      iterations: 2,
+    },
+    manyBody: { strength: -170, distanceMin: 24 },
+    x: { strength: 0.025 },
+    y: { strength: 0.025 },
+    collide: {
+      radius: (node: { id: unknown }) => (
+        labelMetricsMapRef.current.get(String(node.id))?.footprintRadius ?? 48
+      ),
+      strength: 1,
+      iterations: 3,
+    },
+    alpha: phase === 'full' ? 1 : 0.32,
+    alphaMin: phase === 'full' ? 0.001 : 0.04,
+    velocityDecay: 0.42,
+    iterations: phase === 'full' ? FULL_LAYOUT_ITERATIONS : INCREMENTAL_LAYOUT_ITERATIONS,
+  }), [])
+
+  const getCurrentPositions = useCallback((graph: Graph) => {
+    const positions = new Map<string, GraphPosition>()
+    if (graph.rendered) {
+      graph.getNodeData().forEach((node) => {
+        const x = Number(node.style?.x)
+        const y = Number(node.style?.y)
+        if (Number.isFinite(x) && Number.isFinite(y)) positions.set(String(node.id), { x, y })
+      })
+    }
+    manualPositionsRef.current.forEach((position, id) => positions.set(id, position))
+    return positions
+  }, [])
+
+  const restoreManualPositions = useCallback(async (graph: Graph) => {
+    const updates = Array.from(manualPositionsRef.current, ([id, position]) => ({
+      id,
+      style: { x: position.x, y: position.y },
+    })).filter(({ id }) => atoms.some((atom) => atom.id === id))
+    if (updates.length === 0) return
+
+    graph.updateNodeData(updates)
+    await graph.draw()
+  }, [atoms])
+
+  const fitGraph = useCallback(async (graph: Graph, animation: boolean | { duration: number } = false) => {
+    await graph.fitView({ when: 'always', direction: 'both' }, animation)
+  }, [])
+
   // 初始化 G6 图实例（仅一次）
   useEffect(() => {
     const container = containerRef.current
@@ -162,6 +314,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       container: graphMount,
       autoResize: true,
       animation: false,
+      padding: GRAPH_PADDING,
       background: isDark ? '#020617' : '#f8fafc',
       node: {
         type: 'circle',
@@ -170,6 +323,8 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
           const degree = degreeMapRef.current.get(id) ?? 0
           const r = getDotRadius(degree)
           const fill = getNodeFill(id, degree)
+          const label = labelMetricsMapRef.current.get(id)?.text
+            ?? truncateLabel((d.data?.content as string) ?? '')
           return {
             size: r * 2,
             fill,
@@ -179,12 +334,18 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
             shadowColor: degree >= 6 ? fill : 'transparent',
             shadowBlur: degree >= 6 ? 8 : 0,
             // 标签
-            labelText: truncateLabel((d.data?.content as string) ?? ''),
+            labelText: label,
             labelPlacement: 'bottom' as const,
-            labelOffsetY: 2,
-            labelFontSize: 9,
-            labelFill: isDark ? '#475569' : '#64748b',
+            labelOffsetY: LABEL_OFFSET_Y,
+            labelFontSize: LABEL_FONT_SIZE,
+            labelLineHeight: LABEL_LINE_HEIGHT,
+            labelFill: isDark ? '#94a3b8' : '#475569',
             labelWordWrap: false,
+            labelBackground: true,
+            labelBackgroundFill: isDark ? '#020617' : '#f8fafc',
+            labelBackgroundOpacity: 0.9,
+            labelBackgroundRadius: 3,
+            labelPadding: [2, 4, 2, 4],
           }
         },
         // 选中态：白色描边 + 紫色晕光
@@ -202,28 +363,49 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
         style: (d) => ({
           stroke: (d.data?.userConfirmed as boolean) ? '#64748b' : '#334155',
           lineWidth: (d.data?.userConfirmed as boolean) ? 1.5 : 1,
+          strokeOpacity: (d.data?.userConfirmed as boolean) ? 0.72 : 0.55,
           lineDash: (d.data?.userConfirmed as boolean) ? undefined : [4, 4],
           endArrow: false,
         }),
       },
-      layout: {
-        type: 'd3-force',
-        // d3-force 细粒度参数
-        link: { distance: 80 },
-        manyBody: { strength: -90 },
-        x: { strength: 0.05 },
-        y: { strength: 0.05 },
-        // 碰撞半径随 degree 动态调整，大节点周围留出更多空间
-        collide: {
-          radius: (node: { id: unknown }) =>
-            getDotRadius(degreeMapRef.current.get(node.id as string) ?? 0) + 24,
+      layout: createLayoutOptions('full'),
+      behaviors: [
+        'drag-canvas',
+        'zoom-canvas',
+        { type: 'drag-element-force', key: 'drag-force', fixed: true },
+        {
+          type: 'auto-adapt-label',
+          key: 'auto-labels',
+          padding: 6,
+          throttle: 50,
+          sortNode: (a: { id: unknown }, b: { id: unknown }) => {
+            const getPriority = (id: string) => {
+              if (id === selectedIdRef.current) return 10_000
+              if (id === hoveredIdRef.current) return 9_000
+              if (id === searchMatchIdRef.current || id === focusIdRef.current) return 8_000
+              return degreeMapRef.current.get(id) ?? 0
+            }
+            const aId = String(a.id)
+            const bId = String(b.id)
+            const difference = getPriority(bId) - getPriority(aId)
+            if (difference !== 0) return difference < 0 ? -1 : 1
+            return aId === bId ? 0 : aId < bId ? -1 : 1
+          },
         },
-        iterations: 300,
-      },
-      behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element'],
+        {
+          type: 'fix-element-size',
+          key: 'keep-readable',
+          enable: true,
+          node: [{ shape: 'key' }, { shape: 'label' }],
+          edge: [{ shape: 'key', fields: ['lineWidth'] }],
+        },
+      ],
     })
 
     graphRef.current = graph
+    isFirstRenderRef.current = true
+    topologySignatureRef.current = null
+    labelSignatureRef.current = null
 
     // 点击节点：选中 + 进入聚焦候选
     graph.on(NodeEvent.CLICK, (e: IElementEvent) => {
@@ -244,6 +426,21 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       setTooltip(null)
     })
 
+    // force 拖动固定节点后记录位置，后续增量布局仍沿用用户选择的位置
+    graph.on(NodeEvent.DRAG_END, (e: IElementEvent) => {
+      const id = (e.target as { id: string }).id
+      try {
+        const node = graph.getNodeData(id)
+        const x = Number(node.style?.x)
+        const y = Number(node.style?.y)
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          manualPositionsRef.current.set(id, { x, y })
+        }
+      } catch {
+        // 节点可能在拖动结束前被删除，忽略
+      }
+    })
+
     // 点击画布空白：取消选中
     graph.on(CanvasEvent.CLICK, () => {
       onNodeSelectRef.current?.(null)
@@ -255,6 +452,8 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     graph.on(NodeEvent.POINTER_ENTER, (e: IElementEvent) => {
       clearTooltipTimer()
       const id = (e.target as { id: string }).id
+      hoveredIdRef.current = id
+      graph.updateBehavior({ key: 'auto-labels' })
       try {
         if (!isActiveGraph(graph, lifecycleId)) return
         const nodeData = graph.getNodeData(id)
@@ -277,6 +476,8 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     })
 
     graph.on(NodeEvent.POINTER_LEAVE, () => {
+      hoveredIdRef.current = null
+      graph.updateBehavior({ key: 'auto-labels' })
       clearTooltipTimer()
       setTooltip(null)
     })
@@ -293,14 +494,69 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
           graphMount.remove()
         })
     }
-  }, [isActiveGraph, isDark])
+  }, [createLayoutOptions, isActiveGraph, isDark])
 
-  // 数据变化时更新图（re-render 重新布局）
+  // 数据变化时区分完整布局、增量布局和仅重绘，减少无意义的位置跳动
   useEffect(() => {
     runGraphTask(async (graph, lifecycleId) => {
+      const isInitialLayout = !graph.rendered || topologySignatureRef.current === null
+      const topologyChanged = topologySignatureRef.current !== topologySignature
+      const labelFootprintChanged = labelSignatureRef.current !== labelSignature
+      const shouldLayout = isInitialLayout || topologyChanged || labelFootprintChanged
+      const previousPositions = getCurrentPositions(graph)
+      const positionedNodes = new Map(previousPositions)
+      const stableAtoms = [...atoms].sort((a, b) => a.id.localeCompare(b.id))
+      const stableLinks = [...visibleLinks].sort((a, b) => a.id.localeCompare(b.id))
+
+      const previousValues = Array.from(previousPositions.values())
+      const graphCenter = previousValues.length > 0
+        ? previousValues.reduce(
+            (center, position) => ({ x: center.x + position.x, y: center.y + position.y }),
+            { x: 0, y: 0 },
+          )
+        : { x: 0, y: 0 }
+      if (previousValues.length > 0) {
+        graphCenter.x /= previousValues.length
+        graphCenter.y /= previousValues.length
+      }
+
+      const nodes = stableAtoms.map((atom) => {
+        let position = positionedNodes.get(atom.id)
+
+        if (!position && previousPositions.size > 0) {
+          const neighborIds = stableLinks.flatMap((link) => {
+            if (link.fromAtomId === atom.id) return [link.toAtomId]
+            if (link.toAtomId === atom.id) return [link.fromAtomId]
+            return []
+          })
+          const neighborPositions = neighborIds
+            .map((id) => positionedNodes.get(id))
+            .filter((value): value is GraphPosition => value !== undefined)
+          const anchor = neighborPositions.length > 0
+            ? neighborPositions.reduce(
+                (center, value) => ({ x: center.x + value.x, y: center.y + value.y }),
+                { x: 0, y: 0 },
+              )
+            : { ...graphCenter }
+          if (neighborPositions.length > 0) {
+            anchor.x /= neighborPositions.length
+            anchor.y /= neighborPositions.length
+          }
+          const jitter = getStableJitter(atom.id)
+          position = { x: anchor.x + jitter.x, y: anchor.y + jitter.y }
+          positionedNodes.set(atom.id, position)
+        }
+
+        return {
+          id: atom.id,
+          data: { content: atom.content },
+          ...(position ? { style: { x: position.x, y: position.y } } : {}),
+        }
+      })
+
       graph.setData({
-        nodes: atoms.map((a) => ({ id: a.id, data: { content: a.content } })),
-        edges: visibleLinks.map((l) => ({
+        nodes,
+        edges: stableLinks.map((l) => ({
           id: l.id,
           source: l.fromAtomId,
           target: l.toAtomId,
@@ -308,22 +564,39 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
         })),
       })
 
-      await graph.render()
+      if (shouldLayout) {
+        graph.setLayout(createLayoutOptions(isInitialLayout ? 'full' : 'incremental'))
+        await graph.render()
+        if (!isActiveGraph(graph, lifecycleId)) return
+        await restoreManualPositions(graph)
+      } else {
+        await graph.draw()
+      }
       if (!isActiveGraph(graph, lifecycleId)) return
 
       if (isFirstRenderRef.current) {
         isFirstRenderRef.current = false
-        // 先无动画 fitView，再无动画缩至 70%，一步到位不闪烁
-        await graph.fitView(undefined, false)
-        if (!isActiveGraph(graph, lifecycleId)) return
-        const fitted = graph.getZoom()
-        await graph.zoomTo(Math.max(fitted * 0.63, 0.15), false)
+        await fitGraph(graph)
         if (!isActiveGraph(graph, lifecycleId)) return
       }
       const sid = selectedIdRef.current
       if (sid) await graph.setElementState(sid, ['selected'])
+
+      topologySignatureRef.current = topologySignature
+      labelSignatureRef.current = labelSignature
     })
-  }, [atoms, visibleLinks, isActiveGraph, runGraphTask])
+  }, [
+    atoms,
+    visibleLinks,
+    topologySignature,
+    labelSignature,
+    createLayoutOptions,
+    fitGraph,
+    getCurrentPositions,
+    isActiveGraph,
+    restoreManualPositions,
+    runGraphTask,
+  ])
 
   // selectedId 变化时更新 G6 状态
   useEffect(() => {
@@ -333,8 +606,9 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       // 全量更新：先清除所有，再设置选中
       const stateMap: Record<string, string[]> = {}
       atoms.forEach((a) => { stateMap[a.id] = [] })
-      if (selectedId) stateMap[selectedId] = ['selected']
+      if (selectedId && selectedId in stateMap) stateMap[selectedId] = ['selected']
       await graph.setElementState(stateMap)
+      graph.updateBehavior({ key: 'auto-labels' })
     })
   }, [selectedId, atoms, runGraphTask])
 
@@ -373,12 +647,12 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
   // 搜索：定位到第一个匹配节点
   useEffect(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return
-    const match = atoms.find((a) => a.content.toLowerCase().includes(q))
-    if (!match) return
+    const match = q ? atoms.find((a) => a.content.toLowerCase().includes(q)) : undefined
+    searchMatchIdRef.current = match?.id ?? null
     runGraphTask(async (graph) => {
       if (!graph.rendered) return
-      await graph.focusElement(match.id, { duration: 400 })
+      graph.updateBehavior({ key: 'auto-labels' })
+      if (match) await graph.focusElement(match.id, { duration: 400 })
     })
   }, [query, atoms, runGraphTask])
 
@@ -426,8 +700,12 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
           onClick={() => {
             setMode('all')
             setFocusId(null)
-            runGraphTask(async (graph) => {
-              if (graph.rendered) await graph.fitView()
+            manualPositionsRef.current.clear()
+            runGraphTask(async (graph, lifecycleId) => {
+              if (!graph.rendered) return
+              await graph.layout(createLayoutOptions('full'))
+              if (!isActiveGraph(graph, lifecycleId)) return
+              await fitGraph(graph, { duration: 300 })
             })
           }}
           className="rounded-md px-3 py-1.5 text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
@@ -438,7 +716,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
           type="button"
           onClick={() => {
             runGraphTask(async (graph) => {
-              if (graph.rendered) await graph.fitView()
+              if (graph.rendered) await fitGraph(graph, { duration: 300 })
             })
           }}
           className="rounded-md px-3 py-1.5 text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
