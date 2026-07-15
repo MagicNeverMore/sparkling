@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Graph, NodeEvent, CanvasEvent } from '@antv/g6'
+import { Graph, GraphEvent, NodeEvent, CanvasEvent } from '@antv/g6'
 import type { IElementEvent } from '@antv/g6'
 import type { AtomMock, LinkMock } from '../../lib/mock'
 import { useTheme } from '../../lib/ThemeProvider'
@@ -136,6 +136,7 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
   const topologySignatureRef = useRef<string | null>(null)
   const labelSignatureRef = useRef<string | null>(null)
   const manualPositionsRef = useRef(new Map<string, GraphPosition>())
+  const draggingNodeIdsRef = useRef(new Set<string>())
 
   // Ref 存储最新布局信息，供 G6 初始化闭包中的样式和 force 回调使用
   const degreeMapRef = useRef(new Map<string, number>())
@@ -303,12 +304,13 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     const container = containerRef.current
     if (!container) return
     const graphMount = document.createElement('div')
-    graphMount.className = 'h-full w-full'
+    graphMount.className = 'relative h-full w-full touch-none'
     container.appendChild(graphMount)
 
     const lifecycleId = graphLifecycleRef.current + 1
     graphLifecycleRef.current = lifecycleId
     graphTaskQueueRef.current = Promise.resolve()
+    const draggingNodeIds = draggingNodeIdsRef.current
 
     const graph = new Graph({
       container: graphMount,
@@ -329,12 +331,13 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
             size: r * 2,
             fill,
             stroke: 'none',
-            cursor: 'pointer',
+            draggable: true,
+            cursor: 'default',
             // 枢纽节点加软发光
             shadowColor: degree >= 6 ? fill : 'transparent',
             shadowBlur: degree >= 6 ? 8 : 0,
             // 标签
-            labelText: label,
+            labelText: draggingNodeIds.has(id) ? '' : label,
             labelPlacement: 'bottom' as const,
             labelOffsetY: LABEL_OFFSET_Y,
             labelFontSize: LABEL_FONT_SIZE,
@@ -372,7 +375,6 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       behaviors: [
         'drag-canvas',
         'zoom-canvas',
-        { type: 'drag-element-force', key: 'drag-force', fixed: true },
         {
           type: 'auto-adapt-label',
           key: 'auto-labels',
@@ -407,13 +409,169 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     topologySignatureRef.current = null
     labelSignatureRef.current = null
 
+    let activePointerDrag: {
+      id: string
+      startClientX: number
+      startClientY: number
+      startCanvasX: number
+      startCanvasY: number
+      startX: number
+      startY: number
+      x: number
+      y: number
+      started: boolean
+    } | null = null
+    let suppressClickUntil = 0
+    let nativeMoveFrame: number | null = null
+    let nativeDragIdleTimer: ReturnType<typeof setTimeout> | null = null
+    let nativeDrawQueue = Promise.resolve()
+    const manualLabelElements = new Map<string, HTMLDivElement>()
+
+    const syncManualLabel = (id: string, position: GraphPosition) => {
+      if (!isActiveGraph(graph, lifecycleId)) return
+      let labelElement = manualLabelElements.get(id)
+      if (!labelElement) {
+        labelElement = document.createElement('div')
+        labelElement.dataset.manualGraphLabel = id
+        labelElement.className = 'pointer-events-none absolute whitespace-nowrap rounded px-1 py-0.5 text-[10px] leading-3'
+        labelElement.style.zIndex = '2'
+        graphMount.appendChild(labelElement)
+        manualLabelElements.set(id, labelElement)
+      }
+
+      labelElement.textContent = labelMetricsMapRef.current.get(id)?.text ?? ''
+      labelElement.style.color = isDark ? '#94a3b8' : '#475569'
+      labelElement.style.background = isDark ? 'rgba(2, 6, 23, 0.9)' : 'rgba(248, 250, 252, 0.9)'
+      const [clientX, clientY] = graph.getClientByCanvas([position.x, position.y])
+      const rect = graphMount.getBoundingClientRect()
+      const degree = degreeMapRef.current.get(id) ?? 0
+      labelElement.style.left = `${clientX - rect.left}px`
+      labelElement.style.top = `${clientY - rect.top + getDotRadius(degree) + LABEL_OFFSET_Y}px`
+      labelElement.style.transform = 'translateX(-50%)'
+    }
+
+    const syncManualLabels = () => {
+      manualPositionsRef.current.forEach((position, id) => syncManualLabel(id, position))
+      manualLabelElements.forEach((element, id) => {
+        if (manualPositionsRef.current.has(id)) return
+        element.remove()
+        manualLabelElements.delete(id)
+      })
+    }
+
+    const queueNodeDraw = (id: string, position: GraphPosition) => {
+      nativeDrawQueue = nativeDrawQueue
+        .catch(() => undefined)
+        .then(async () => {
+          if (!isActiveGraph(graph, lifecycleId)) return
+          draggingNodeIds.add(id)
+          graph.updateNodeData([{
+            id,
+            style: { x: position.x, y: position.y, labelText: '' },
+          }])
+          await graph.draw()
+          syncManualLabel(id, position)
+        })
+    }
+
+    const flushNativePointerMove = () => {
+      nativeMoveFrame = null
+      if (!activePointerDrag) return
+      queueNodeDraw(
+        activePointerDrag.id,
+        { x: activePointerDrag.x, y: activePointerDrag.y },
+      )
+    }
+
+    const finishNativePointerDrag = () => {
+      if (!activePointerDrag) return
+      if (nativeDragIdleTimer) {
+        clearTimeout(nativeDragIdleTimer)
+        nativeDragIdleTimer = null
+      }
+      if (nativeMoveFrame !== null) {
+        window.cancelAnimationFrame(nativeMoveFrame)
+        flushNativePointerMove()
+      }
+
+      const completedDrag = activePointerDrag
+      activePointerDrag = null
+      if (!completedDrag.started) return
+
+      const position = { x: completedDrag.x, y: completedDrag.y }
+      manualPositionsRef.current.set(completedDrag.id, position)
+      syncManualLabel(completedDrag.id, position)
+    }
+
+    // G6 5.1.1 的带 label node 在 translate stage 会触发 AABB 异常。
+    // 这里精确更新 model，并用随 viewport 同步的 DOM label 保持拖动后的文字可读。
+    const handleNativePointerMove = (event: PointerEvent) => {
+      if (!activePointerDrag) return
+
+      const totalDistance = Math.hypot(
+        event.clientX - activePointerDrag.startClientX,
+        event.clientY - activePointerDrag.startClientY,
+      )
+      if (totalDistance < 3) return
+
+      suppressClickUntil = Date.now() + 300
+      const [canvasX, canvasY] = graph.getCanvasByClient([event.clientX, event.clientY])
+      activePointerDrag.x = activePointerDrag.startX
+        + canvasX - activePointerDrag.startCanvasX
+      activePointerDrag.y = activePointerDrag.startY
+        + canvasY - activePointerDrag.startCanvasY
+
+      activePointerDrag.started = true
+      manualPositionsRef.current.set(activePointerDrag.id, {
+        x: activePointerDrag.x,
+        y: activePointerDrag.y,
+      })
+      if (nativeMoveFrame === null) {
+        nativeMoveFrame = window.requestAnimationFrame(flushNativePointerMove)
+      }
+      if (nativeDragIdleTimer) clearTimeout(nativeDragIdleTimer)
+      nativeDragIdleTimer = setTimeout(finishNativePointerDrag, 1000)
+      event.preventDefault()
+    }
+
+    window.addEventListener('pointermove', handleNativePointerMove)
+    window.addEventListener('pointerup', finishNativePointerDrag)
+    window.addEventListener('pointercancel', finishNativePointerDrag)
+    graph.on(GraphEvent.AFTER_TRANSFORM, syncManualLabels)
+    graph.on(GraphEvent.AFTER_DRAW, syncManualLabels)
+
     // 点击节点：选中 + 进入聚焦候选
     graph.on(NodeEvent.CLICK, (e: IElementEvent) => {
+      if (Date.now() < suppressClickUntil) return
       const id = (e.target as { id: string }).id
       setFocusId(id)
       onNodeSelectRef.current?.(id)
       clearTooltipTimer()
       setTooltip(null)
+    })
+
+    graph.on(NodeEvent.POINTER_DOWN, (e: IElementEvent) => {
+      const event = e as unknown as {
+        client: { x: number; y: number }
+      }
+      const id = (e.target as { id: string }).id
+      const node = graph.getNodeData(id)
+      const x = Number(node.style?.x)
+      const y = Number(node.style?.y)
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return
+      const [canvasX, canvasY] = graph.getCanvasByClient([event.client.x, event.client.y])
+      activePointerDrag = {
+        id,
+        startClientX: event.client.x,
+        startClientY: event.client.y,
+        startCanvasX: canvasX,
+        startCanvasY: canvasY,
+        startX: x,
+        startY: y,
+        x,
+        y,
+        started: false,
+      }
     })
 
     // 双击节点：进入聚焦模式
@@ -426,23 +584,9 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
       setTooltip(null)
     })
 
-    // force 拖动固定节点后记录位置，后续增量布局仍沿用用户选择的位置
-    graph.on(NodeEvent.DRAG_END, (e: IElementEvent) => {
-      const id = (e.target as { id: string }).id
-      try {
-        const node = graph.getNodeData(id)
-        const x = Number(node.style?.x)
-        const y = Number(node.style?.y)
-        if (Number.isFinite(x) && Number.isFinite(y)) {
-          manualPositionsRef.current.set(id, { x, y })
-        }
-      } catch {
-        // 节点可能在拖动结束前被删除，忽略
-      }
-    })
-
     // 点击画布空白：取消选中
     graph.on(CanvasEvent.CLICK, () => {
+      if (Date.now() < suppressClickUntil) return
       onNodeSelectRef.current?.(null)
       clearTooltipTimer()
       setTooltip(null)
@@ -458,9 +602,10 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
         if (!isActiveGraph(graph, lifecycleId)) return
         const nodeData = graph.getNodeData(id)
         const rect = graphMount.getBoundingClientRect()
-        // G6 的 FederatedPointerEvent 透传 clientX/clientY
-        const clientX = (e as unknown as PointerEvent).clientX ?? 0
-        const clientY = (e as unknown as PointerEvent).clientY ?? 0
+        // G6 的 FederatedPointerEvent 使用 client point 表示浏览器坐标
+        const point = (e as unknown as { client?: { x: number; y: number } }).client
+        const clientX = point?.x ?? 0
+        const clientY = point?.y ?? 0
         tooltipTimerRef.current = setTimeout(() => {
           if (!isActiveGraph(graph, lifecycleId)) return
           setTooltip({
@@ -483,6 +628,14 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
     })
 
     return () => {
+      if (nativeMoveFrame !== null) window.cancelAnimationFrame(nativeMoveFrame)
+      if (nativeDragIdleTimer) clearTimeout(nativeDragIdleTimer)
+      draggingNodeIds.clear()
+      manualLabelElements.forEach((element) => element.remove())
+      manualLabelElements.clear()
+      window.removeEventListener('pointermove', handleNativePointerMove)
+      window.removeEventListener('pointerup', finishNativePointerDrag)
+      window.removeEventListener('pointercancel', finishNativePointerDrag)
       clearTooltipTimer()
       graphLifecycleRef.current += 1
       if (graphRef.current === graph) graphRef.current = null
@@ -701,6 +854,10 @@ export default function GraphCanvas({ atoms, links, selectedId, onNodeSelect }: 
             setMode('all')
             setFocusId(null)
             manualPositionsRef.current.clear()
+            draggingNodeIdsRef.current.clear()
+            containerRef.current
+              ?.querySelectorAll('[data-manual-graph-label]')
+              .forEach((element) => element.remove())
             runGraphTask(async (graph, lifecycleId) => {
               if (!graph.rendered) return
               await graph.layout(createLayoutOptions('full'))
