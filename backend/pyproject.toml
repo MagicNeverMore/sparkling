@@ -9,6 +9,7 @@ dependencies = [
     "anyio>=4.14.0",
     "argon2-cffi>=25.1.0",
     "fastapi>=0.138.0",
+    "feedparser>=6.0.12",
     "httpx>=0.28.1",
     "openai>=2.43.0",
     "pgvector>=0.4.2",

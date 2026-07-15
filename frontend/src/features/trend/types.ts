@@ -50,11 +50,9 @@ export interface TrendSettingsRaw {
   effective_llm_base_url: string | null
   effective_llm_model: string | null
   uses_chat_fallback: boolean
-  reddit_enabled: boolean
   github_enabled: boolean
   hackernews_enabled: boolean
   google_enabled: boolean
-  reddit_limit: number
   github_limit: number
   hackernews_limit: number
   google_limit: number
@@ -70,4 +68,24 @@ export interface TrendSettingsRaw {
   timezone: string
   last_run_at: string | null
   next_run_at: string | null
+}
+
+export interface TrendRssSource {
+  id: string
+  name: string
+  url: string
+  enabled: boolean
+  item_limit: number
+  created_at: string
+  updated_at: string
+}
+
+export interface TrendRssTestResult {
+  ok: boolean
+  candidate_count: number
+  message: string
+  samples: Array<{
+    title: string
+    url: string
+  }>
 }

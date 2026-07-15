@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Optional
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..db import DatabaseConnectionError, get_session, switch_database
 from ..logger import get_logger
-from ..models import AtomEmbedding, Settings, TaskQueue, ThoughtAtom, ThoughtLink
+from ..models import AtomEmbedding, Settings, TaskQueue, ThoughtAtom, ThoughtLink, TrendRssSource
 from ..runtime import start_background_worker, stop_background_worker
 from ..services import task_queue as tq
 from ..services.settings.runtime_config import build_database_config, get_database_config
@@ -19,7 +21,7 @@ from ..services.memory.embedding import atom_content_hash, embed_texts, test_pro
 from ..services.ai.chat import test_chat_provider
 from ..services.settings.settings_snapshot import snapshot_chat_settings, snapshot_embedding_settings, snapshot_trend_settings
 from ..services.trend.collector import MAX_TREND_BRAND_PROMPT_CHARS, calculate_next_run_at, test_trend_provider
-from ..services.trend.sources import normalize_source_config
+from ..services.trend.sources import RssSourceConfig, fetch_rss_source, normalize_source_config
 from ..time_utils import DEFAULT_TIMEZONE, get_timezone, utc_isoformat
 from ..vector_store import create_vec_table, ensure_vec_table
 
@@ -84,11 +86,9 @@ class TrendSettingsUpdate(BaseModel):
     llm_base_url: Optional[str] = None
     llm_api_key: Optional[str] = None
     llm_model: Optional[str] = None
-    reddit_enabled: Optional[bool] = None
     github_enabled: Optional[bool] = None
     hackernews_enabled: Optional[bool] = None
     google_enabled: Optional[bool] = None
-    reddit_limit: Optional[int] = None
     github_limit: Optional[int] = None
     hackernews_limit: Optional[int] = None
     google_limit: Optional[int] = None
@@ -113,11 +113,9 @@ class TrendSettingsOut(BaseModel):
     effective_llm_base_url: Optional[str]
     effective_llm_model: Optional[str]
     uses_chat_fallback: bool
-    reddit_enabled: bool
     github_enabled: bool
     hackernews_enabled: bool
     google_enabled: bool
-    reddit_limit: int
     github_limit: int
     hackernews_limit: int
     google_limit: int
@@ -134,6 +132,95 @@ class TrendSettingsOut(BaseModel):
     timezone: str
     last_run_at: Optional[str]
     next_run_at: Optional[str]
+
+
+class TrendRssSourceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    url: str = Field(min_length=1, max_length=2000)
+    enabled: bool = True
+    item_limit: int = Field(default=8, ge=1, le=50)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("RSS source name is required")
+        return name
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        url = value.strip()
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("RSS URL must be a valid http or https URL")
+        return url
+
+
+class TrendRssSourceUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    url: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+    enabled: Optional[bool] = None
+    item_limit: Optional[int] = Field(default=None, ge=1, le=50)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name = value.strip()
+        if not name:
+            raise ValueError("RSS source name is required")
+        return name
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        url = value.strip()
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("RSS URL must be a valid http or https URL")
+        return url
+
+
+class TrendRssSourceOut(BaseModel):
+    id: str
+    name: str
+    url: str
+    enabled: bool
+    item_limit: int
+    created_at: str
+    updated_at: str
+
+
+class TrendRssSourceTestRequest(BaseModel):
+    url: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        url = value.strip()
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("RSS URL must be a valid http or https URL")
+        return url
+
+
+class TrendRssTestSampleOut(BaseModel):
+    title: str
+    url: str
+
+
+class TrendRssSourceTestOut(BaseModel):
+    ok: bool
+    candidate_count: int
+    message: str
+    samples: list[TrendRssTestSampleOut]
 
 
 class TestProviderResult(BaseModel):
@@ -243,11 +330,9 @@ def _to_trend_out(s: Settings) -> TrendSettingsOut:
         effective_llm_base_url=effective_base_url,
         effective_llm_model=effective_model,
         uses_chat_fallback=not bool(s.trend_base_url or s.trend_api_key or s.trend_model),
-        reddit_enabled=bool(source_config["reddit"]["enabled"]),
         github_enabled=bool(source_config["github"]["enabled"]),
         hackernews_enabled=bool(source_config["hackernews"]["enabled"]),
         google_enabled=bool(source_config["google"]["enabled"]),
-        reddit_limit=int(source_config["reddit"]["limit"]),
         github_limit=int(source_config["github"]["limit"]),
         hackernews_limit=int(source_config["hackernews"]["limit"]),
         google_limit=int(source_config["google"]["limit"]),
@@ -265,6 +350,26 @@ def _to_trend_out(s: Settings) -> TrendSettingsOut:
         last_run_at=utc_isoformat(s.trend_last_run_at) if s.trend_last_run_at else None,
         next_run_at=utc_isoformat(s.trend_next_run_at) if s.trend_next_run_at else None,
     )
+
+
+def _to_rss_source_out(source: TrendRssSource) -> TrendRssSourceOut:
+    return TrendRssSourceOut(
+        id=source.id,
+        name=source.name,
+        url=source.url,
+        enabled=source.enabled,
+        item_limit=source.item_limit,
+        created_at=utc_isoformat(source.created_at),
+        updated_at=utc_isoformat(source.updated_at),
+    )
+
+
+def _ensure_rss_url_available(session: Session, url: str, *, exclude_id: str | None = None) -> None:
+    query = session.query(TrendRssSource).filter(TrendRssSource.url == url)
+    if exclude_id:
+        query = query.filter(TrendRssSource.id != exclude_id)
+    if query.first() is not None:
+        raise HTTPException(status_code=409, detail="RSS URL already exists")
 
 
 def _enqueue_link_discover_for_active_atoms(session: Session) -> int:
@@ -315,11 +420,9 @@ async def update_trend_settings(
         s.trend_model = body.llm_model or None
 
     source_fields = {
-        "reddit_enabled",
         "github_enabled",
         "hackernews_enabled",
         "google_enabled",
-        "reddit_limit",
         "github_limit",
         "hackernews_limit",
         "google_limit",
@@ -327,7 +430,6 @@ async def update_trend_settings(
     }
     if fields_set & source_fields:
         for key, source_name in [
-            ("reddit_enabled", "reddit"),
             ("github_enabled", "github"),
             ("hackernews_enabled", "hackernews"),
             ("google_enabled", "google"),
@@ -335,7 +437,6 @@ async def update_trend_settings(
             if key in fields_set:
                 source_config[source_name]["enabled"] = bool(getattr(body, key))
         for key, source_name in [
-            ("reddit_limit", "reddit"),
             ("github_limit", "github"),
             ("hackernews_limit", "hackernews"),
             ("google_limit", "google"),
@@ -387,6 +488,111 @@ async def update_trend_settings(
     session.commit()
     session.refresh(s)
     return _to_trend_out(s)
+
+
+@router.get("/trend/rss-sources", response_model=list[TrendRssSourceOut])
+def list_trend_rss_sources(session: Session = Depends(get_session)) -> list[TrendRssSourceOut]:
+    sources = session.query(TrendRssSource).order_by(TrendRssSource.created_at.asc()).all()
+    return [_to_rss_source_out(source) for source in sources]
+
+
+@router.post("/trend/rss-sources", response_model=TrendRssSourceOut, status_code=201)
+def create_trend_rss_source(
+    body: TrendRssSourceCreate,
+    session: Session = Depends(get_session),
+) -> TrendRssSourceOut:
+    _ensure_rss_url_available(session, body.url)
+    source = TrendRssSource(
+        name=body.name,
+        url=body.url,
+        enabled=body.enabled,
+        item_limit=body.item_limit,
+    )
+    session.add(source)
+    session.commit()
+    session.refresh(source)
+    logger.info("Trend RSS source 已创建 source_id=%s name=%s", source.id, source.name)
+    return _to_rss_source_out(source)
+
+
+@router.patch("/trend/rss-sources/{source_id}", response_model=TrendRssSourceOut)
+def update_trend_rss_source(
+    source_id: str,
+    body: TrendRssSourceUpdate,
+    session: Session = Depends(get_session),
+) -> TrendRssSourceOut:
+    source = session.get(TrendRssSource, source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="RSS source not found")
+    fields_set = body.model_fields_set
+    if "url" in fields_set and body.url is not None:
+        _ensure_rss_url_available(session, body.url, exclude_id=source_id)
+        source.url = body.url
+    if "name" in fields_set and body.name is not None:
+        source.name = body.name
+    if "enabled" in fields_set and body.enabled is not None:
+        source.enabled = body.enabled
+    if "item_limit" in fields_set and body.item_limit is not None:
+        source.item_limit = body.item_limit
+    source.updated_at = datetime.utcnow()
+    session.commit()
+    session.refresh(source)
+    logger.info("Trend RSS source 已更新 source_id=%s name=%s", source.id, source.name)
+    return _to_rss_source_out(source)
+
+
+@router.post("/trend/rss-sources/{source_id}/test", response_model=TrendRssSourceTestOut)
+async def test_trend_rss_source(
+    source_id: str,
+    body: TrendRssSourceTestRequest,
+    session: Session = Depends(get_session),
+) -> TrendRssSourceTestOut:
+    source = session.get(TrendRssSource, source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="RSS source not found")
+    test_source = RssSourceConfig(
+        id=source.id,
+        name=source.name,
+        url=body.url or source.url,
+        limit=source.item_limit,
+    )
+    try:
+        candidates = await fetch_rss_source(test_source)
+    except Exception as exc:
+        logger.warning("Trend RSS source 测试失败 source_id=%s error=%s", source.id, exc)
+        return TrendRssSourceTestOut(
+            ok=False,
+            candidate_count=0,
+            message=f"RSS 请求或解析失败：{str(exc)[:300]}",
+            samples=[],
+        )
+    if not candidates:
+        logger.warning("Trend RSS source 测试未发现可处理条目 source_id=%s", source.id)
+        return TrendRssSourceTestOut(
+            ok=False,
+            candidate_count=0,
+            message="RSS 数据结构不正确，未发现同时包含标题和链接的条目",
+            samples=[],
+        )
+    samples = [TrendRssTestSampleOut(title=item.title, url=item.url) for item in candidates[:3]]
+    logger.info("Trend RSS source 测试成功 source_id=%s candidates=%d", source.id, len(candidates))
+    return TrendRssSourceTestOut(
+        ok=True,
+        candidate_count=len(candidates),
+        message=f"RSS 可用，发现 {len(candidates)} 条可处理条目",
+        samples=samples,
+    )
+
+
+@router.delete("/trend/rss-sources/{source_id}", status_code=204)
+def delete_trend_rss_source(source_id: str, session: Session = Depends(get_session)) -> Response:
+    source = session.get(TrendRssSource, source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="RSS source not found")
+    session.delete(source)
+    session.commit()
+    logger.info("Trend RSS source 已删除 source_id=%s", source_id)
+    return Response(status_code=204)
 
 
 @router.get("/database", response_model=DatabaseSettingsOut)

@@ -129,6 +129,21 @@ class TrendItem(Base):
     last_seen_at: Mapped[datetime] = mapped_column(default=_now)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class TrendRssSource(Base):
+    """用户自定义的 RSS/Atom 信息源。"""
+
+    __tablename__ = "trend_rss_source"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    url: Mapped[str] = mapped_column(String(2000), unique=True, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    item_limit: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
 class TrendRun(Base):

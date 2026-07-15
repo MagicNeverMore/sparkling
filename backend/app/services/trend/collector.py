@@ -16,12 +16,19 @@ from sqlalchemy.orm import Session
 
 from ...db import SessionLocal
 from ...logger import get_logger
-from ...models import Settings, TaskQueue, TrendItem, TrendRun
+from ...models import Settings, TaskQueue, TrendItem, TrendRssSource, TrendRun
 from ...time_utils import local_to_utc_naive, utc_naive_to_local
 from .. import task_queue as tq
 from ..ai.openai_compat import normalize_base_url
 from ..settings.settings_snapshot import TrendSettingsSnapshot, snapshot_trend_settings
-from .sources import TrendCandidate, canonical_url, discover_candidates, normalize_source_config
+from .sources import (
+    RssSourceConfig,
+    TrendCandidate,
+    canonical_url,
+    discover_candidates,
+    discover_rss_candidates,
+    normalize_source_config,
+)
 
 logger = get_logger(__name__)
 
@@ -311,6 +318,20 @@ async def collect_trends(run_id: str) -> dict[str, int]:
             run.error = None
             settings_snapshot = snapshot_trend_settings(settings)
             source_config = _load_source_config(settings_snapshot)
+            rss_sources = [
+                RssSourceConfig(
+                    id=source.id,
+                    name=source.name,
+                    url=source.url,
+                    limit=source.item_limit,
+                )
+                for source in (
+                    session.query(TrendRssSource)
+                    .filter(TrendRssSource.enabled.is_(True))
+                    .order_by(TrendRssSource.created_at.asc())
+                    .all()
+                )
+            ]
             brand_prompt = _truncate_llm_text(
                 settings_snapshot.trend_brand_prompt or DEFAULT_TREND_PROMPT,
                 MAX_TREND_BRAND_PROMPT_CHARS,
@@ -329,8 +350,19 @@ async def collect_trends(run_id: str) -> dict[str, int]:
                 result_limit,
             )
 
-        search_queries = await plan_search_queries(settings_snapshot, brand_prompt, source_config)
-        candidates = await _discover_candidates_from_queries(search_queries, source_config)
+        query_sources_enabled = any(
+            config.get("enabled")
+            for source, config in source_config.items()
+            if source != "google"
+        )
+        if not query_sources_enabled and not rss_sources:
+            raise ValueError("没有启用可用的信息源")
+        search_queries = (
+            await plan_search_queries(settings_snapshot, brand_prompt, source_config)
+            if query_sources_enabled
+            else []
+        )
+        candidates = await _discover_candidates_from_queries(search_queries, source_config, rss_sources)
         with SessionLocal() as session:
             run = session.get(TrendRun, run_id)
             if run is None:
@@ -439,8 +471,8 @@ async def plan_search_queries(
         {
             "role": "user",
             "content": (
-                "Create concise search queries suitable for Reddit, GitHub repository search, "
-                "and Hacker News Algolia. Return JSON with exactly one key: queries. "
+                "Create concise search queries suitable for GitHub repository search and "
+                "Hacker News Algolia. Return JSON with exactly one key: queries. "
                 "queries must be an array of 1 to 5 strings, each <= 120 characters. "
                 "Prefer topic phrases over instructions or audience/persona text. "
                 f"Input:\n{json.dumps(payload, ensure_ascii=False)}"
@@ -480,6 +512,7 @@ async def plan_search_queries(
 async def _discover_candidates_from_queries(
     queries: list[str],
     source_config: dict[str, Any],
+    rss_sources: list[RssSourceConfig] | None = None,
 ) -> list[TrendCandidate]:
     candidates: list[TrendCandidate] = []
     seen: set[str] = set()
@@ -492,6 +525,14 @@ async def _discover_candidates_from_queries(
                 continue
             seen.add(key)
             candidates.append(candidate)
+    rss_candidates = await discover_rss_candidates(rss_sources or [])
+    logger.info("Trend RSS 候选发现完成 candidates=%d", len(rss_candidates))
+    for candidate in rss_candidates:
+        key = canonical_url(candidate.url)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
     return candidates
 
 
@@ -711,7 +752,7 @@ def _validated_resources(raw_resources: Any, evidence: list[TrendEvidence]) -> l
                 {
                     "title": str(item.get("title") or base["title"]),
                     "url": base["url"],
-                    "source": str(item.get("source") or base["source"]),
+                    "source": base["source"],
                 }
             )
             seen.add(key)
@@ -745,7 +786,7 @@ def _candidate_urls(evidence: TrendEvidence) -> list[str]:
     if evidence.fetched.final_url and evidence.fetched.final_url != evidence.candidate.url:
         urls.append(evidence.fetched.final_url)
     metadata = evidence.candidate.metadata or {}
-    for key in ("reddit_url", "hn_url"):
+    for key in ("hn_url",):
         value = metadata.get(key)
         if value:
             urls.append(str(value))
