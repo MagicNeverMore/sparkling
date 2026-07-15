@@ -48,7 +48,7 @@ class TrendQueryPlanningTest(unittest.IsolatedAsyncioTestCase):
         _db, models, collector, _TrendCandidate = _app_modules()
         settings = models.Settings(trend_model="fake-model")
         prompt = "关注热点： - AI; -自动化; -Technology Trend; -software startups"
-        source_config = {"reddit": {"enabled": True, "limit": 8}}
+        source_config = {"github": {"enabled": True, "limit": 8}}
 
         captured_messages = []
 
@@ -74,7 +74,7 @@ class TrendQueryPlanningTest(unittest.IsolatedAsyncioTestCase):
             patch.object(collector, "_create_json_chat_completion", AsyncMock(return_value=_completion('{"queries": []}'))),
             self.assertRaisesRegex(ValueError, "搜索 query 生成失败"),
         ):
-            await collector.plan_search_queries(settings, "关注热点：AI", {"reddit": {"enabled": True, "limit": 8}})
+            await collector.plan_search_queries(settings, "关注热点：AI", {"github": {"enabled": True, "limit": 8}})
 
     async def test_planner_rejects_invalid_json(self) -> None:
         _db, models, collector, _TrendCandidate = _app_modules()
@@ -85,7 +85,7 @@ class TrendQueryPlanningTest(unittest.IsolatedAsyncioTestCase):
             patch.object(collector, "_create_json_chat_completion", AsyncMock(return_value=_completion("not json"))),
             self.assertRaisesRegex(ValueError, "LLM 返回不是有效 JSON"),
         ):
-            await collector.plan_search_queries(settings, "关注热点：AI", {"reddit": {"enabled": True, "limit": 8}})
+            await collector.plan_search_queries(settings, "关注热点：AI", {"github": {"enabled": True, "limit": 8}})
 
     async def test_discovery_uses_planned_queries_and_dedupes_candidates(self) -> None:
         _db, _models, collector, TrendCandidate = _app_modules()

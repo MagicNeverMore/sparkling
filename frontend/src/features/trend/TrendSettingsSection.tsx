@@ -6,6 +6,7 @@ import { useI18n } from '../../lib/I18nProvider'
 import { MAX_TREND_BRAND_PROMPT_CHARS } from '../../lib/limits'
 import { formatDateTime } from '../../lib/time'
 import type { TrendScheduleMode, TrendSettingsRaw } from './types'
+import { RssSourceManager } from './RssSourceManager'
 
 const weekDays = [
   { value: 1, labelKey: 'settings.weekdayMon' },
@@ -23,11 +24,9 @@ export default function TrendSettingsSection() {
   const { lang, t } = useI18n()
   const { show } = useToast()
   const [brandPrompt, setBrandPrompt] = useState('')
-  const [redditEnabled, setRedditEnabled] = useState(true)
   const [githubEnabled, setGithubEnabled] = useState(true)
   const [hackernewsEnabled, setHackernewsEnabled] = useState(true)
   const [googleEnabled, setGoogleEnabled] = useState(false)
-  const [redditLimit, setRedditLimit] = useState(8)
   const [githubLimit, setGithubLimit] = useState(8)
   const [hackernewsLimit, setHackernewsLimit] = useState(8)
   const [googleLimit, setGoogleLimit] = useState(8)
@@ -52,11 +51,9 @@ export default function TrendSettingsSection() {
       .get<TrendSettingsRaw>('/api/settings/trend')
       .then((s) => {
         setBrandPrompt(s.brand_prompt)
-        setRedditEnabled(s.reddit_enabled)
         setGithubEnabled(s.github_enabled)
         setHackernewsEnabled(s.hackernews_enabled)
         setGoogleEnabled(s.google_enabled)
-        setRedditLimit(s.reddit_limit)
         setGithubLimit(s.github_limit)
         setHackernewsLimit(s.hackernews_limit)
         setGoogleLimit(s.google_limit)
@@ -87,11 +84,9 @@ export default function TrendSettingsSection() {
 
   const buildPayload = () => ({
     brand_prompt: brandPrompt || null,
-    reddit_enabled: redditEnabled,
     github_enabled: githubEnabled,
     hackernews_enabled: hackernewsEnabled,
     google_enabled: googleEnabled,
-    reddit_limit: redditLimit,
     github_limit: githubLimit,
     hackernews_limit: hackernewsLimit,
     google_limit: googleLimit,
@@ -164,7 +159,6 @@ export default function TrendSettingsSection() {
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50">
           <h2 className="text-sm font-medium text-emerald-400">{t('settings.trendSources')}</h2>
           <div className="mt-4 grid gap-3">
-            <SourceRow label="Reddit" enabled={redditEnabled} onEnabled={setRedditEnabled} limit={redditLimit} onLimit={setRedditLimit} />
             <SourceRow label="GitHub" enabled={githubEnabled} onEnabled={setGithubEnabled} limit={githubLimit} onLimit={setGithubLimit} />
             <SourceRow label="Hacker News" enabled={hackernewsEnabled} onEnabled={setHackernewsEnabled} limit={hackernewsLimit} onLimit={setHackernewsLimit} />
             <SourceRow label="Google Search" enabled={googleEnabled} onEnabled={setGoogleEnabled} limit={googleLimit} onLimit={setGoogleLimit} disabledHint={t('settings.googleDisabledHint')} />
@@ -193,6 +187,7 @@ export default function TrendSettingsSection() {
               </button>
             </div>
           </label>
+          <RssSourceManager />
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">

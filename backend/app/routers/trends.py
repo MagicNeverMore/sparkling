@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -124,7 +125,7 @@ def list_trends(
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
 ) -> TrendListOut:
-    query = session.query(TrendItem)
+    query = session.query(TrendItem).filter(TrendItem.deleted_at.is_(None))
     if q:
         like = f"%{q.strip()}%"
         query = query.filter(
@@ -152,7 +153,11 @@ def list_trends(
         ]
         if tag_lower and tag_lower not in tags:
             continue
-        if source_lower and source_lower not in sources:
+        source_matches = source_lower is None or any(
+            value == source_lower or (source_lower == "rss" and value.startswith("rss:"))
+            for value in sources
+        )
+        if not source_matches:
             continue
         filtered.append(item)
 
@@ -193,7 +198,20 @@ def latest_trend_run(session: Session = Depends(get_session)) -> Optional[TrendR
 @router.get("/{trend_id}", response_model=TrendItemOut)
 def get_trend(trend_id: str, session: Session = Depends(get_session)) -> TrendItemOut:
     item = session.get(TrendItem, trend_id)
-    if not item:
+    if not item or item.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Trend not found")
     logger.debug("读取 Trend 详情 trend_id=%s", trend_id)
     return _to_item_out(item)
+
+
+@router.delete("/{trend_id}", status_code=204)
+def delete_trend(trend_id: str, session: Session = Depends(get_session)) -> Response:
+    item = session.get(TrendItem, trend_id)
+    if not item or item.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Trend not found")
+    now = datetime.utcnow()
+    item.deleted_at = now
+    item.updated_at = now
+    session.commit()
+    logger.info("Trend 已软删除 trend_id=%s", trend_id)
+    return Response(status_code=204)

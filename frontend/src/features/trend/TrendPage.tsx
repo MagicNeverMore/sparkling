@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, ExternalLink, RefreshCw, Search, Tag } from 'lucide-react'
+import { AlertCircle, ExternalLink, RefreshCw, Search, Tag, Trash2 } from 'lucide-react'
+import ConfirmDialog from '../../components/ConfirmDialog'
 import EmptyState from '../../components/EmptyState'
 import { useToast } from '../../components/useToast'
 import { api, ApiError } from '../../lib/api'
@@ -7,7 +8,7 @@ import { formatDateTime, formatRelative } from '../../lib/time'
 import { useI18n } from '../../lib/I18nProvider'
 import type { TrendItem, TrendListRaw, TrendRun } from './types'
 
-const sourceOptions = ['reddit', 'github', 'hackernews', 'google']
+const sourceOptions = ['github', 'hackernews', 'rss']
 
 export default function Trends() {
   const { lang, t } = useI18n()
@@ -23,6 +24,8 @@ export default function Trends() {
   const [running, setRunning] = useState(false)
   const [latestRun, setLatestRun] = useState<TrendRun | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const [deleteTarget, setDeleteTarget] = useState<TrendItem | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const selected = useMemo(
     () => items.find((item) => item.id === selectedId) ?? items[0] ?? null,
@@ -98,6 +101,24 @@ export default function Trends() {
     setCategory('')
     setTagFilter('')
     setSourceFilter('')
+  }
+
+  const deleteTrend = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await api.del<void>(`/api/trends/${deleteTarget.id}`)
+      setItems((current) => current.filter((item) => item.id !== deleteTarget.id))
+      setTotal((current) => Math.max(0, current - 1))
+      setSelectedId(null)
+      setDeleteTarget(null)
+      show(t('trends.deleted'), 'success')
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(t('trends.deleteFailed', { message }), 'error')
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const runStatusText = latestRun
@@ -223,10 +244,20 @@ export default function Trends() {
 
             {selected && (
               <article className="min-h-0 overflow-auto p-5 md:p-6">
-                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                  {selected.category && <span className="rounded-md border border-slate-200 px-2 py-1 dark:border-slate-700">{selected.category}</span>}
-                  <span className="rounded-md border border-slate-200 px-2 py-1 font-mono dark:border-slate-700">score {selected.score.toFixed(0)}</span>
-                  <span>{formatDateTime(selected.last_seen_at, lang)}</span>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    {selected.category && <span className="rounded-md border border-slate-200 px-2 py-1 dark:border-slate-700">{selected.category}</span>}
+                    <span className="rounded-md border border-slate-200 px-2 py-1 font-mono dark:border-slate-700">score {selected.score.toFixed(0)}</span>
+                    <span>{formatDateTime(selected.last_seen_at, lang)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(selected)}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-slate-500 transition hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-950/30"
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                    {t('common.delete')}
+                  </button>
                 </div>
                 <h2 className="mt-4 text-2xl font-semibold leading-tight text-slate-950 dark:text-slate-100">{selected.title}</h2>
                 {selected.scoring_reason && (
@@ -287,6 +318,16 @@ export default function Trends() {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title={t('trends.deleteTitle')}
+        confirmLabel={t('common.delete')}
+        confirming={deleting}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => void deleteTrend()}
+      >
+        {t('trends.deleteConfirm', { title: deleteTarget?.title ?? '' })}
+      </ConfirmDialog>
     </div>
   )
 }

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+import feedparser
 import httpx
 
 from ...logger import get_logger
@@ -16,7 +17,6 @@ logger = get_logger(__name__)
 
 USER_AGENT = "SparklingTrendBot/0.1 (+https://localhost)"
 DEFAULT_SOURCE_CONFIG: dict[str, dict[str, Any]] = {
-    "reddit": {"enabled": True, "limit": 8},
     "github": {"enabled": True, "limit": 8, "token": None},
     "hackernews": {"enabled": True, "limit": 8},
     "google": {"enabled": False, "limit": 8},
@@ -48,6 +48,14 @@ class TrendCandidate:
             "score_hint": self.score_hint,
             "metadata": _safe_metadata(self.metadata),
         }
+
+
+@dataclass(frozen=True)
+class RssSourceConfig:
+    id: str
+    name: str
+    url: str
+    limit: int
 
 
 def _truncate_text(value: Any, max_chars: int) -> str | None:
@@ -148,7 +156,6 @@ async def discover_candidates(
     ) as client:
         results: list[TrendCandidate] = []
         source_calls = [
-            ("reddit", _fetch_reddit),
             ("github", _fetch_github),
             ("hackernews", _fetch_hackernews),
         ]
@@ -170,43 +177,99 @@ async def discover_candidates(
         return unique
 
 
-async def _fetch_reddit(
-    client: httpx.AsyncClient,
-    query: str,
-    _config: dict[str, Any],
-    limit: int,
-) -> list[TrendCandidate]:
-    res = await client.get(
-        "https://www.reddit.com/search.json",
-        params={"q": query, "sort": "hot", "t": "week", "limit": limit},
+async def discover_rss_candidates(sources: list[RssSourceConfig]) -> list[TrendCandidate]:
+    """抓取启用的 RSS/Atom source；单个 feed 失败不影响其他 feed。"""
+    if not sources:
+        return []
+    async with _create_rss_client() as client:
+        results: list[TrendCandidate] = []
+        for source in sources:
+            try:
+                source_results = await _fetch_rss(client, source)
+                results.extend(source_results)
+                logger.info(
+                    "Trend RSS source 获取完成 source_id=%s name=%s count=%d limit=%d",
+                    source.id,
+                    source.name,
+                    len(source_results),
+                    source.limit,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Trend RSS source 获取失败 source_id=%s name=%s error=%s",
+                    source.id,
+                    source.name,
+                    exc,
+                )
+        return _dedupe_candidates(results)
+
+
+async def fetch_rss_source(source: RssSourceConfig) -> list[TrendCandidate]:
+    """读取单个 RSS/Atom source，并保留请求或解析错误供调用方展示。"""
+    async with _create_rss_client() as client:
+        return await _fetch_rss(client, source)
+
+
+def _create_rss_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(12.0),
+        follow_redirects=True,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*;q=0.5",
+        },
     )
-    res.raise_for_status()
-    children = res.json().get("data", {}).get("children", [])
+
+
+async def _fetch_rss(client: httpx.AsyncClient, source: RssSourceConfig) -> list[TrendCandidate]:
+    response = await client.get(source.url)
+    response.raise_for_status()
+    parsed = feedparser.parse(response.content)
+    entries = list(parsed.get("entries") or [])
+    if not entries and parsed.get("bozo"):
+        raise ValueError(f"RSS 解析失败: {parsed.get('bozo_exception')}")
+
     candidates: list[TrendCandidate] = []
-    for child in children:
-        data = child.get("data", {})
-        title = (data.get("title") or "").strip()
-        permalink = data.get("permalink")
-        reddit_url = f"https://www.reddit.com{permalink}" if permalink else None
-        url = data.get("url_overridden_by_dest") or reddit_url
+    for entry in entries[: max(1, min(source.limit, 50))]:
+        title = str(entry.get("title") or "").strip()
+        url = _rss_entry_url(entry)
         if not title or not url:
             continue
+        tags = [
+            str(tag.get("term"))
+            for tag in (entry.get("tags") or [])[:10]
+            if isinstance(tag, dict) and tag.get("term")
+        ]
         candidates.append(
             TrendCandidate(
-                source="reddit",
+                source=f"rss:{source.name}",
                 title=title,
                 url=url,
-                summary=data.get("selftext") or None,
-                published_at=str(data.get("created_utc")) if data.get("created_utc") else None,
-                score_hint=float(data.get("score") or 0),
+                summary=entry.get("summary") or entry.get("description") or None,
+                published_at=entry.get("published") or entry.get("updated") or None,
                 metadata={
-                    "subreddit": data.get("subreddit"),
-                    "comments": data.get("num_comments"),
-                    "reddit_url": reddit_url,
+                    "rss_source_id": source.id,
+                    "rss_source_name": source.name,
+                    "feed_url": source.url,
+                    "author": entry.get("author"),
+                    "tags": tags,
                 },
             )
         )
     return candidates
+
+
+def _rss_entry_url(entry: dict[str, Any]) -> str | None:
+    direct = str(entry.get("link") or "").strip()
+    if direct:
+        return direct
+    for link in entry.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        href = str(link.get("href") or "").strip()
+        if href and link.get("rel", "alternate") == "alternate":
+            return href
+    return None
 
 
 async def _fetch_github(
