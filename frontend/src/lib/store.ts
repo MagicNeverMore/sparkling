@@ -54,6 +54,7 @@ interface State {
   addAtom: (content: string) => Promise<void>
   updateAtom: (id: string, patch: Partial<AtomMock>) => Promise<void>
   deleteAtom: (id: string) => Promise<void>
+  createManualLink: (fromAtomId: string, toAtomId: string) => Promise<void>
   confirmLink: (id: string) => Promise<void>
   ignoreLink: (id: string) => Promise<void>
   pushSuggestion: (link: LinkMock) => void
@@ -120,6 +121,22 @@ export const useSparklingStore = create<State>((set, get) => ({
       set({ atoms: previousAtoms, links: previousLinks })
       throw error
     }
+  },
+
+  createManualLink: async (fromAtomId: string, toAtomId: string) => {
+    const raw = await api.post<LinkRaw>('/api/links', {
+      from_atom_id: fromAtomId,
+      to_atom_id: toAtomId,
+    })
+    const created = fromLinkRaw(raw)
+    set((state) => {
+      const exists = state.links.some((link) => link.id === created.id)
+      return {
+        links: exists
+          ? state.links.map((link) => (link.id === created.id ? created : link))
+          : [created, ...state.links],
+      }
+    })
   },
 
   confirmLink: async (id: string) => {

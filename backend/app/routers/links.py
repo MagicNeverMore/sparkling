@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ..db import get_session
@@ -29,6 +30,11 @@ class LinkOut(BaseModel):
     created_at: str
 
     model_config = {"from_attributes": True}
+
+
+class ManualLinkCreate(BaseModel):
+    from_atom_id: str = Field(..., min_length=1, max_length=255)
+    to_atom_id: str = Field(..., min_length=1, max_length=255)
 
 
 def _to_out(link: ThoughtLink) -> LinkOut:
@@ -77,6 +83,79 @@ async def list_links(session: Session = Depends(get_session)) -> list[LinkOut]:
         suggest_threshold,
     )
     return visible_links
+
+
+@router.post("", response_model=LinkOut)
+async def create_manual_link(
+    body: ManualLinkCreate,
+    session: Session = Depends(get_session),
+) -> LinkOut:
+    """通过 atom UUID 手动建立关联；已有边会被恢复并确认为用户关联。"""
+    from_atom_id = body.from_atom_id.strip()
+    to_atom_id = body.to_atom_id.strip()
+    if from_atom_id == to_atom_id:
+        raise HTTPException(status_code=400, detail="不能将 atom 与自身关联")
+
+    atoms = {
+        atom.id: atom
+        for atom in (
+            session.query(ThoughtAtom)
+            .filter(ThoughtAtom.id.in_([from_atom_id, to_atom_id]))
+            .all()
+        )
+    }
+    if from_atom_id not in atoms or atoms[from_atom_id].status == "deleted":
+        raise HTTPException(status_code=404, detail="来源 atom 不存在")
+    if to_atom_id not in atoms or atoms[to_atom_id].status == "deleted":
+        raise HTTPException(status_code=404, detail="目标 atom 不存在")
+
+    link = (
+        session.query(ThoughtLink)
+        .filter(
+            or_(
+                and_(
+                    ThoughtLink.from_atom_id == from_atom_id,
+                    ThoughtLink.to_atom_id == to_atom_id,
+                ),
+                and_(
+                    ThoughtLink.from_atom_id == to_atom_id,
+                    ThoughtLink.to_atom_id == from_atom_id,
+                ),
+            )
+        )
+        .order_by(ThoughtLink.created_at.desc())
+        .first()
+    )
+    if link is None:
+        # 固定端点顺序，避免同一条无向边被反向重复创建。
+        first_id, second_id = sorted((from_atom_id, to_atom_id))
+        link = ThoughtLink(
+            from_atom_id=first_id,
+            to_atom_id=second_id,
+            link_type="manual",
+            confidence=None,
+            source="user",
+            user_confirmed=True,
+            user_ignored=False,
+        )
+        session.add(link)
+    else:
+        link.source = "user"
+        link.user_confirmed = True
+        link.user_ignored = False
+
+    session.commit()
+    session.refresh(link)
+    out = _to_out(link)
+    logger.info(
+        "手动关联已建立 link_id=%s from=%s to=%s",
+        link.id,
+        link.from_atom_id,
+        link.to_atom_id,
+    )
+    session.close()
+    await manager.broadcast("link.created", out.model_dump())
+    return out
 
 
 @router.post("/{link_id}/confirm", response_model=LinkOut)
