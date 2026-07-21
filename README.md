@@ -1,6 +1,6 @@
 # Sparkling
 
-> Local-first fragmented thought manager — AI-powered semantic linking + knowledge graph visualization + PWA mobile
+> A local-first workspace for thoughts, tasks, and curated trends — AI-powered semantic linking, knowledge graphs, and an installable PWA.
 
 [中文说明](./README-zh.md)
 
@@ -10,7 +10,10 @@
 - **AI semantic linking** — Auto-discover connections between thoughts with auto-confirm / suggest two-tier thresholds
 - **Knowledge graph** — AntV G6 interactive network graph, drag to explore thought relationships
 - **Semantic search** — Natural language search powered by vector similarity
-- **Task management** — Calendar view + todo list with due-date reminders
+- **Task management** — Calendar view, todo list, and due-date tracking
+- **Trend intelligence** — Collect GitHub, Hacker News, and custom RSS/Atom signals; use AI to score, summarize, tag, and retain the useful items
+- **Scheduled trend runs** — Run collection on a local-time schedule, or trigger it on demand
+- **Single-user access** — First-run registration and cookie-based local sessions
 - **Monthly activity heatmap** — Inbox activity at a glance
 - **Dark / Light / System** — Three theme modes
 - **Chinese / English** — UI internationalization
@@ -36,7 +39,7 @@ cd sparkling
 docker compose up -d
 ```
 
-First start will automatically: build image → install dependencies → create database → run migrations → start services.
+On first start, Sparkling builds the image, installs dependencies, creates its databases, runs migrations, and starts the service. Open the app and create the local user account.
 
 ### 3. Open
 
@@ -58,7 +61,10 @@ docker compose down
 
 ## Data Persistence
 
-The SQLite database file is stored in the **named volume** `sparkling-data`, mounted at `/data/sparkling.db` inside the container.
+The named volume `sparkling-data` is mounted at `/data`. It stores both SQLite files:
+
+- `sparkling.db` — thoughts, tasks, links, vectors, trends, and application settings
+- `control.db` — selected database configuration, the local user, and sessions
 
 ```bash
 # View volume location (macOS: inside Docker Desktop's managed virtual disk)
@@ -80,13 +86,15 @@ docker compose down -v        # ⚠️ also deletes volume, data unrecoverable
 ### Backup & Restore
 
 ```bash
-# Backup
-docker compose exec sparkling cp /data/sparkling.db /data/sparkling.db.bak
+# Backup both databases
 docker cp sparkling:/data/sparkling.db ./sparkling-backup.db
+docker cp sparkling:/data/control.db ./control-backup.db
 
-# Restore (after stopping the container)
+# Restore (with the container stopped)
+docker compose stop
 docker cp ./sparkling-backup.db sparkling:/data/sparkling.db
-docker compose restart
+docker cp ./control-backup.db sparkling:/data/control.db
+docker compose start
 ```
 
 ## Environment Variables
@@ -105,7 +113,7 @@ Modify the corresponding `environment` fields in `docker-compose.yml`. Database 
 
 ## AI Provider Configuration
 
-After Docker deployment, configure Embedding and Chat providers separately on the **Settings** page:
+After deployment, configure providers on the **Settings** page. Values are stored in the active business database; secrets are masked when they are read back by the UI.
 
 **Embedding**
 - Base URL — API endpoint (e.g. `https://api.openai.com/v1`)
@@ -113,11 +121,18 @@ After Docker deployment, configure Embedding and Chat providers separately on th
 - Model — e.g. `text-embedding-3-small`
 - Dimension — locked once set; switching requires a rebuild
 
-**Chat (reserved)**
-- Independent Base URL / API Key / Model
-- Built-in connectivity test button
+**Chat and Trend intelligence**
+- Chat and Trend collection may use independent Base URL / API Key / Model settings
+- Trend collection falls back to the Chat provider when no dedicated Trend provider is configured
+- Built-in connectivity tests; Trend sources can include GitHub, Hacker News, and custom RSS/Atom feeds
+- Configure a score threshold, result limit, and a browser-timezone-aware schedule
 
-These settings are stored in the `settings` table in SQLite and persist with the volume.
+### Trend workflow
+
+1. Write a Brand Brain prompt describing the topics and signals you care about.
+2. Enable GitHub, Hacker News, and/or custom RSS/Atom sources in **Settings → Trends**.
+3. Run collection from the **Trends** page or enable a schedule.
+4. Sparkling plans source queries, deduplicates candidates, uses the configured LLM to score and summarize them, and saves items meeting the configured threshold.
 
 ---
 
@@ -162,26 +177,27 @@ sparkling/
 │   │   │   ├── graph.py         # Graph data
 │   │   │   ├── tasks.py         # Task management
 │   │   │   ├── settings.py      # AI / DB configuration
+│   │   │   ├── trends.py        # Trend feed and collection runs
+│   │   │   ├── auth.py          # Local user and session endpoints
 │   │   │   └── ws.py            # WebSocket real-time events
 │   │   ├── services/             # Business logic
-│   │   │   ├── embedding.py     # Embedding calls + dimension locking
-│   │   │   ├── linker.py        # Link discovery (KNN + threshold routing)
-│   │   │   ├── chat.py          # Chat provider
+│   │   │   ├── ai/              # OpenAI-compatible chat client
+│   │   │   ├── memory/          # Embeddings, links, and cleanup
+│   │   │   ├── settings/        # Runtime database configuration
+│   │   │   ├── trend/           # Trend collection, sources, and cleanup
 │   │   │   ├── task_queue.py    # Async task queue (SQLite)
 │   │   │   ├── ws_manager.py    # WebSocket connection manager
-│   │   │   ├── cleanup.py       # Soft-delete cleanup
-│   │   │   └── runtime_config.py # Runtime DB configuration
 │   │   └── workers/              # Background task workers
 │   └── logs/                     # Log files (sparkling.log + error.log)
 ├── frontend/
 │   └── src/
-│       ├── pages/                # Pages
-│       │   ├── Inbox.tsx         # Inbox (quick input + card stream + heatmap)
-│       │   ├── Graph.tsx         # Knowledge graph
-│       │   ├── Search.tsx        # Semantic search
-│       │   ├── Tasks.tsx         # Task management (calendar + list)
-│       │   ├── Settings.tsx      # Settings (AI / DB / appearance)
-│       │   └── AtomDetail.tsx    # Thought detail + AI link suggestions
+│       ├── features/             # Feature-oriented UI modules
+│       │   ├── memory/           # Inbox, search, and thought details
+│       │   ├── graph/            # Knowledge graph canvas
+│       │   ├── tasks/            # Calendar and task list
+│       │   ├── trend/            # Trend feed and source settings
+│       │   ├── settings/         # AI, database, appearance, and trend settings
+│       │   └── auth/             # Registration, login, and user profile
 │       ├── components/           # Shared components
 │       ├── lib/                  # API / Store / i18n / Theme
 │       └── layouts/              # Layout (AppShell + SideNav)
