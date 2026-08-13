@@ -4,7 +4,11 @@
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -26,6 +30,24 @@ MAX_CANDIDATE_URL_CHARS = 2_000
 MAX_CANDIDATE_SUMMARY_CHARS = 2_000
 MAX_CANDIDATE_METADATA_ITEMS = 20
 MAX_CANDIDATE_METADATA_TEXT_CHARS = 500
+
+# GitHub 的 Repository Search 只能提供总 star 数，无法说明项目是否在近期被关注。
+# 因此先用规模与活跃度过滤候选，再用 GraphQL 的 starredAt 做增量验证。
+GITHUB_RECENT_PUSH_DAYS = 14
+GITHUB_NEW_REPOSITORY_DAYS = 30
+GITHUB_NEW_MIN_STARS = 200
+GITHUB_NEW_MIN_FORKS = 10
+GITHUB_MATURE_MIN_STARS = 500
+GITHUB_MATURE_MIN_FORKS = 25
+GITHUB_FALLBACK_NEW_MIN_STARS = 500
+GITHUB_FALLBACK_NEW_MIN_FORKS = 25
+GITHUB_FALLBACK_MATURE_MIN_STARS = 1_000
+GITHUB_FALLBACK_MATURE_MIN_FORKS = 50
+GITHUB_MIN_STARS_LAST_7_DAYS = 50
+GITHUB_MIN_STARS_LAST_30_DAYS = 150
+GITHUB_NEW_MIN_STARS_LAST_7_DAYS = 80
+GITHUB_STAR_PAGE_SIZE = 100
+GITHUB_CANDIDATE_POOL_MULTIPLIER = 3
 
 
 @dataclass(frozen=True)
@@ -56,6 +78,16 @@ class RssSourceConfig:
     name: str
     url: str
     limit: int
+
+
+@dataclass(frozen=True)
+class GithubStarActivity:
+    stars_last_7d: int
+    stars_last_30d: int
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _truncate_text(value: Any, max_chars: int) -> str | None:
@@ -282,41 +314,340 @@ async def _fetch_github(
     token = config.get("token")
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    now = _utc_now()
+    pushed_since = (now - timedelta(days=GITHUB_RECENT_PUSH_DAYS)).date().isoformat()
+    query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()[:12]
+    candidate_pool_size = min(max(limit * GITHUB_CANDIDATE_POOL_MULTIPLIER, 12), 50)
     res = await client.get(
         "https://api.github.com/search/repositories",
         params={
-            "q": f"{query} in:name,description,readme",
-            "sort": "updated",
+            "q": (
+                f"{query} in:name,description,readme "
+                f"pushed:>={pushed_since} "
+                f"stars:>={GITHUB_NEW_MIN_STARS} forks:>={GITHUB_NEW_MIN_FORKS} "
+                "fork:false archived:false"
+            ),
+            "sort": "stars",
             "order": "desc",
-            "per_page": limit,
+            "per_page": candidate_pool_size,
         },
         headers=headers,
     )
     res.raise_for_status()
-    items = res.json().get("items", [])
-    candidates: list[TrendCandidate] = []
+    payload = res.json()
+    items = payload.get("items", []) if isinstance(payload, dict) else []
+    if not isinstance(items, list):
+        raise ValueError("GitHub Repository Search 返回 items 字段格式不正确")
+
+    rejected: Counter[str] = Counter()
+    baseline_items: list[tuple[dict[str, Any], str]] = []
     for item in items:
-        title = item.get("full_name") or item.get("name")
-        url = item.get("html_url")
-        if not title or not url:
+        if not isinstance(item, dict):
+            rejected["invalid_item"] += 1
             continue
-        candidates.append(
-            TrendCandidate(
-                source="github",
-                title=title,
-                url=url,
-                summary=item.get("description") or None,
-                published_at=item.get("updated_at"),
-                score_hint=float(item.get("stargazers_count") or 0),
-                metadata={
-                    "language": item.get("language"),
-                    "stars": item.get("stargazers_count"),
-                    "forks": item.get("forks_count"),
-                    "open_issues": item.get("open_issues_count"),
-                },
-            )
+        tier, reason = _github_candidate_tier(item, now)
+        if reason:
+            rejected[reason] += 1
+            continue
+        baseline_items.append((item, tier))
+
+    logger.info(
+        "Trend GitHub 基础热度筛选 query_hash=%s raw=%d eligible=%d rejected=%s pushed_since=%s",
+        query_hash,
+        len(items),
+        len(baseline_items),
+        dict(rejected),
+        pushed_since,
+    )
+    if not baseline_items:
+        return []
+
+    if not token:
+        return _conservative_github_candidates(baseline_items, limit, query_hash)
+
+    try:
+        star_activity = await _github_star_activity(client, str(token), baseline_items, now)
+    except Exception as exc:
+        # 没有可信的近期增量就不能把项目标记为热点；不要退回到普通搜索结果。
+        logger.warning(
+            "Trend GitHub star 增量验证失败，已丢弃本次 GitHub 候选 query_hash=%s candidate_count=%d error=%s",
+            query_hash,
+            len(baseline_items),
+            exc,
         )
-    return candidates
+        return []
+
+    candidates: list[TrendCandidate] = []
+    hotness_rejected: Counter[str] = Counter()
+    for index, (item, tier) in enumerate(baseline_items):
+        activity = star_activity.get(index)
+        if activity is None:
+            hotness_rejected["missing_star_activity"] += 1
+            continue
+        if not _passes_github_star_velocity(tier, activity):
+            hotness_rejected["insufficient_recent_stars"] += 1
+            continue
+        candidates.append(_github_candidate_from_item(item, tier, activity, verification="star_velocity"))
+
+    candidates.sort(
+        key=lambda candidate: (
+            int((candidate.metadata or {}).get("stars_last_7d") or 0),
+            int((candidate.metadata or {}).get("stars_last_30d") or 0),
+            int((candidate.metadata or {}).get("stars") or 0),
+            int((candidate.metadata or {}).get("forks") or 0),
+        ),
+        reverse=True,
+    )
+    logger.info(
+        "Trend GitHub 近期热度验证完成 query_hash=%s eligible=%d verified=%d rejected=%s",
+        query_hash,
+        len(baseline_items),
+        len(candidates),
+        dict(hotness_rejected),
+    )
+    return candidates[:limit]
+
+
+def _github_candidate_tier(item: dict[str, Any], now: datetime) -> tuple[str, str | None]:
+    """返回 GitHub 候选的层级，或不满足基础门槛的原因。"""
+    if item.get("fork"):
+        return "", "fork"
+    if item.get("archived") or item.get("disabled"):
+        return "", "inactive_repository"
+    owner = item.get("owner")
+    if (
+        not item.get("full_name")
+        or not item.get("html_url")
+        or not item.get("name")
+        or not isinstance(owner, dict)
+        or not owner.get("login")
+    ):
+        return "", "missing_identity"
+
+    pushed_at = _parse_github_timestamp(item.get("pushed_at"))
+    created_at = _parse_github_timestamp(item.get("created_at"))
+    if pushed_at is None or created_at is None:
+        return "", "invalid_timestamps"
+    if pushed_at < now - timedelta(days=GITHUB_RECENT_PUSH_DAYS):
+        return "", "not_recently_pushed"
+
+    stars = _github_metric(item.get("stargazers_count"))
+    forks = _github_metric(item.get("forks_count"))
+    if stars is None or forks is None:
+        return "", "invalid_metrics"
+    is_new = created_at >= now - timedelta(days=GITHUB_NEW_REPOSITORY_DAYS)
+    if is_new:
+        if stars < GITHUB_NEW_MIN_STARS or forks < GITHUB_NEW_MIN_FORKS:
+            return "", "new_repository_below_baseline"
+        return "new", None
+    if stars < GITHUB_MATURE_MIN_STARS or forks < GITHUB_MATURE_MIN_FORKS:
+        return "", "mature_repository_below_baseline"
+    return "mature", None
+
+
+def _conservative_github_candidates(
+    baseline_items: list[tuple[dict[str, Any], str]],
+    limit: int,
+    query_hash: str,
+) -> list[TrendCandidate]:
+    """未配置 Token 时保持可用，但不把无法验证的项目伪装成近期热点。"""
+    candidates: list[TrendCandidate] = []
+    for item, tier in baseline_items:
+        stars = _github_metric(item.get("stargazers_count")) or 0
+        forks = _github_metric(item.get("forks_count")) or 0
+        if tier == "new":
+            accepted = stars >= GITHUB_FALLBACK_NEW_MIN_STARS and forks >= GITHUB_FALLBACK_NEW_MIN_FORKS
+        else:
+            accepted = stars >= GITHUB_FALLBACK_MATURE_MIN_STARS and forks >= GITHUB_FALLBACK_MATURE_MIN_FORKS
+        if accepted:
+            candidates.append(_github_candidate_from_item(item, tier, None, verification="conservative_without_token"))
+
+    candidates.sort(
+        key=lambda candidate: (
+            int((candidate.metadata or {}).get("stars") or 0),
+            int((candidate.metadata or {}).get("forks") or 0),
+        ),
+        reverse=True,
+    )
+    logger.warning(
+        "Trend GitHub 未配置 token，无法验证近期 star 增量；使用严格保守筛选 query_hash=%s eligible=%d accepted=%d",
+        query_hash,
+        len(baseline_items),
+        len(candidates),
+    )
+    return candidates[:limit]
+
+
+def _github_candidate_from_item(
+    item: dict[str, Any],
+    tier: str,
+    activity: GithubStarActivity | None,
+    *,
+    verification: str,
+) -> TrendCandidate:
+    stars = _github_metric(item.get("stargazers_count")) or 0
+    forks = _github_metric(item.get("forks_count")) or 0
+    return TrendCandidate(
+        source="github",
+        title=str(item.get("full_name") or item.get("name")),
+        url=str(item.get("html_url")),
+        summary=item.get("description") or None,
+        published_at=item.get("pushed_at") or item.get("updated_at"),
+        score_hint=float(stars),
+        metadata={
+            "language": item.get("language"),
+            "stars": stars,
+            "forks": forks,
+            "open_issues": item.get("open_issues_count"),
+            "pushed_at": item.get("pushed_at"),
+            "created_at": item.get("created_at"),
+            "hotness_tier": tier,
+            "hotness_verification": verification,
+            "stars_last_7d": activity.stars_last_7d if activity else None,
+            "stars_last_30d": activity.stars_last_30d if activity else None,
+        },
+    )
+
+
+def _passes_github_star_velocity(tier: str, activity: GithubStarActivity) -> bool:
+    if tier == "new":
+        return activity.stars_last_7d >= GITHUB_NEW_MIN_STARS_LAST_7_DAYS
+    return (
+        activity.stars_last_7d >= GITHUB_MIN_STARS_LAST_7_DAYS
+        or activity.stars_last_30d >= GITHUB_MIN_STARS_LAST_30_DAYS
+    )
+
+
+def _github_metric(value: Any) -> int | None:
+    try:
+        metric = int(value)
+    except (TypeError, ValueError):
+        return None
+    return metric if metric >= 0 else None
+
+
+def _parse_github_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+async def _github_star_activity(
+    client: httpx.AsyncClient,
+    token: str,
+    baseline_items: list[tuple[dict[str, Any], str]],
+    now: datetime,
+) -> dict[int, GithubStarActivity]:
+    """批量读取最近 200 个 star 的时间，避免每个仓库单独请求。"""
+    first_page = await _github_stargazer_page(client, token, baseline_items)
+    stars_by_index: dict[int, list[datetime]] = {}
+    second_page_items: list[tuple[int, dict[str, Any], str, str]] = []
+    cutoff_30d = now - timedelta(days=30)
+
+    for index, (item, tier) in enumerate(baseline_items):
+        page = first_page.get(index)
+        if page is None:
+            continue
+        starred_at, page_info = page
+        stars_by_index[index] = starred_at
+        # 仅当最新 100 个 star 都在 30 天内时，才有可能达到 150/30 天门槛。
+        if (
+            len(starred_at) == GITHUB_STAR_PAGE_SIZE
+            and starred_at
+            and min(starred_at) >= cutoff_30d
+            and page_info.get("hasNextPage")
+            and page_info.get("endCursor")
+        ):
+            second_page_items.append((index, item, tier, str(page_info["endCursor"])))
+
+    if second_page_items:
+        second_page = await _github_stargazer_page(
+            client,
+            token,
+            [(item, tier) for _index, item, tier, _cursor in second_page_items],
+            after_cursors=[cursor for _index, _item, _tier, cursor in second_page_items],
+        )
+        for second_index, (original_index, _item, _tier, _cursor) in enumerate(second_page_items):
+            page = second_page.get(second_index)
+            if page is not None:
+                stars_by_index[original_index].extend(page[0])
+
+    activity: dict[int, GithubStarActivity] = {}
+    cutoff_7d = now - timedelta(days=7)
+    for index, timestamps in stars_by_index.items():
+        activity[index] = GithubStarActivity(
+            stars_last_7d=sum(timestamp >= cutoff_7d for timestamp in timestamps),
+            stars_last_30d=sum(timestamp >= cutoff_30d for timestamp in timestamps),
+        )
+    return activity
+
+
+async def _github_stargazer_page(
+    client: httpx.AsyncClient,
+    token: str,
+    baseline_items: list[tuple[dict[str, Any], str]],
+    *,
+    after_cursors: list[str] | None = None,
+) -> dict[int, tuple[list[datetime], dict[str, Any]]]:
+    fields: list[str] = []
+    for index, (item, _tier) in enumerate(baseline_items):
+        owner = item.get("owner", {}).get("login") if isinstance(item.get("owner"), dict) else None
+        name = item.get("name")
+        if not isinstance(owner, str) or not isinstance(name, str):
+            continue
+        after = ""
+        if after_cursors:
+            after = f", after: {json.dumps(after_cursors[index])}"
+        fields.append(
+            f'''repo_{index}: repository(owner: {json.dumps(owner)}, name: {json.dumps(name)}) {{
+                stargazers(first: {GITHUB_STAR_PAGE_SIZE}{after}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
+                    edges {{ starredAt }}
+                    pageInfo {{ endCursor hasNextPage }}
+                }}
+            }}'''
+        )
+    if not fields:
+        return {}
+
+    response = await client.post(
+        "https://api.github.com/graphql",
+        json={"query": "query TrendGithubStarVelocity {\n" + "\n".join(fields) + "\n}"},
+        headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}"},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("GitHub GraphQL 返回格式不正确")
+    errors = payload.get("errors")
+    if errors:
+        message = errors[0].get("message") if isinstance(errors[0], dict) else "unknown error"
+        raise ValueError(f"GitHub GraphQL 查询失败: {message}")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("GitHub GraphQL 未返回 data")
+
+    result: dict[int, tuple[list[datetime], dict[str, Any]]] = {}
+    for index in range(len(baseline_items)):
+        repository = data.get(f"repo_{index}")
+        stargazers = repository.get("stargazers") if isinstance(repository, dict) else None
+        if not isinstance(stargazers, dict):
+            continue
+        timestamps = [
+            timestamp
+            for edge in stargazers.get("edges") or []
+            if isinstance(edge, dict)
+            for timestamp in [_parse_github_timestamp(edge.get("starredAt"))]
+            if timestamp is not None
+        ]
+        page_info = stargazers.get("pageInfo")
+        result[index] = (timestamps, page_info if isinstance(page_info, dict) else {})
+    return result
 
 
 async def _fetch_hackernews(
