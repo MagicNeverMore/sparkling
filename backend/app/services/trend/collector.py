@@ -38,10 +38,12 @@ MAX_PAGE_TEXT_CHARS = 6_000
 MAX_EVIDENCE_ITEMS = 6
 MAX_FOLLOW_UP_ROUNDS = 2
 MAX_TREND_BRAND_PROMPT_CHARS = 4_000
-MAX_TREND_COMPLETION_TOKENS = 1_600
+# reasoning model 的思考过程也会计入该上限，需为最终 JSON 预留足够空间。
+MAX_TREND_COMPLETION_TOKENS = 3_200
 MAX_TREND_SEARCH_QUERIES = 5
 MAX_TREND_SEARCH_QUERY_CHARS = 120
-MAX_TREND_QUERY_PLAN_TOKENS = 600
+# reasoning model 的思考过程也会计入该上限，需为最终 JSON 预留足够空间。
+MAX_TREND_QUERY_PLAN_TOKENS = 1_600
 TREND_PROVIDER_TEST_TIMEOUT_SECONDS = 20.0
 TREND_LLM_TIMEOUT_SECONDS = 120.0
 TrendSettings = Settings | TrendSettingsSnapshot
@@ -358,7 +360,7 @@ async def collect_trends(run_id: str) -> dict[str, int]:
         if not query_sources_enabled and not rss_sources:
             raise ValueError("没有启用可用的信息源")
         search_queries = (
-            await plan_search_queries(settings_snapshot, brand_prompt, source_config)
+            await plan_search_queries(settings_snapshot, brand_prompt, source_config, run_id=run_id)
             if query_sources_enabled
             else []
         )
@@ -380,13 +382,23 @@ async def collect_trends(run_id: str) -> dict[str, int]:
             evidence = [await _build_evidence(candidate)]
             seen_evidence_urls.add(canonical_url(candidate.url))
             logger.debug("Trend 候选开始评分 run_id=%s source=%s", run_id, candidate.source)
-            result = await _score_with_follow_ups(
-                settings_snapshot,
-                brand_prompt,
-                evidence,
-                source_config,
-                seen_evidence_urls,
-            )
+            try:
+                result = await _score_with_follow_ups(
+                    settings_snapshot,
+                    brand_prompt,
+                    evidence,
+                    source_config,
+                    seen_evidence_urls,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Trend 候选评分失败，已跳过 run_id=%s source=%s error_type=%s error=%s",
+                    run_id,
+                    candidate.source,
+                    type(exc).__name__,
+                    str(exc)[:500],
+                )
+                continue
             if _score_value(result.get("score")) < threshold:
                 logger.debug(
                     "Trend 候选评分低于阈值 run_id=%s score=%.1f threshold=%.1f",
@@ -441,6 +453,8 @@ async def plan_search_queries(
     settings: TrendSettings,
     brand_prompt: str,
     source_config: dict[str, Any],
+    *,
+    run_id: str | None = None,
 ) -> list[str]:
     """让 LLM 根据完整 Brand Brain 规划 source 搜索 query。"""
     enabled_sources = [
@@ -458,6 +472,14 @@ async def plan_search_queries(
         "max_queries": MAX_TREND_SEARCH_QUERIES,
         "max_query_chars": MAX_TREND_SEARCH_QUERY_CHARS,
     }
+    logger.info(
+        "Trend 查询规划开始 run_id=%s model=%s sources=%s brand_prompt_chars=%d max_queries=%d",
+        run_id,
+        model,
+        [source["source"] for source in enabled_sources],
+        len(payload["brand_brain_prompt"]),
+        MAX_TREND_SEARCH_QUERIES,
+    )
     messages = [
         {
             "role": "system",
@@ -497,16 +519,92 @@ async def plan_search_queries(
         if not client.is_closed():
             await client.close()
 
-    content = response.choices[0].message.content or "{}"
+    content, response_diagnostics = _query_plan_response_details(response)
     try:
         parsed = _parse_json_object(content)
     except Exception as exc:
+        logger.warning(
+            "Trend 查询规划返回无效 JSON run_id=%s model=%s choices=%d finish_reason=%s "
+            "content_source=%s content_chars=%d content_sha256=%s has_refusal=%s "
+            "has_reasoning_content=%s has_tool_calls=%s parse_error_type=%s",
+            run_id,
+            model,
+            response_diagnostics["choice_count"],
+            response_diagnostics["finish_reason"],
+            response_diagnostics["content_source"],
+            response_diagnostics["content_chars"],
+            response_diagnostics["content_sha256"],
+            response_diagnostics["has_refusal"],
+            response_diagnostics["has_reasoning_content"],
+            response_diagnostics["has_tool_calls"],
+            type(exc).__name__,
+        )
         raise ValueError(f"搜索 query 生成失败：LLM 返回不是有效 JSON: {exc}") from exc
     queries = _normalise_search_queries(parsed.get("queries"))
     if not queries:
+        query_value = parsed.get("queries")
+        logger.warning(
+            "Trend 查询规划没有可用 queries run_id=%s model=%s choices=%d finish_reason=%s "
+            "content_source=%s content_chars=%d content_sha256=%s has_refusal=%s "
+            "has_reasoning_content=%s has_tool_calls=%s queries_present=%s queries_type=%s raw_query_count=%s "
+            "normalised_query_count=%d",
+            run_id,
+            model,
+            response_diagnostics["choice_count"],
+            response_diagnostics["finish_reason"],
+            response_diagnostics["content_source"],
+            response_diagnostics["content_chars"],
+            response_diagnostics["content_sha256"],
+            response_diagnostics["has_refusal"],
+            response_diagnostics["has_reasoning_content"],
+            response_diagnostics["has_tool_calls"],
+            "queries" in parsed,
+            type(query_value).__name__,
+            len(query_value) if isinstance(query_value, list) else None,
+            len(queries),
+        )
         raise ValueError("搜索 query 生成失败：LLM 没有返回可用 queries")
-    logger.info("Trend 搜索 query 已生成 count=%d", len(queries))
+    logger.info(
+        "Trend 搜索 query 已生成 run_id=%s model=%s count=%d content_source=%s content_sha256=%s",
+        run_id,
+        model,
+        len(queries),
+        response_diagnostics["content_source"],
+        response_diagnostics["content_sha256"],
+    )
     return queries
+
+
+def _query_plan_response_details(response: Any) -> tuple[str, dict[str, Any]]:
+    """提取 query planner 响应的非敏感诊断信息，不记录 prompt 或原始内容。"""
+    choices = getattr(response, "choices", None)
+    choice_count = len(choices) if isinstance(choices, list) else 0
+    choice = choices[0] if choice_count else None
+    message = getattr(choice, "message", None)
+    raw_content = getattr(message, "content", None) if message is not None else None
+    reasoning_content = getattr(message, "reasoning_content", None) if message is not None else None
+    content = raw_content if isinstance(raw_content, str) else ""
+    if content.strip():
+        content_source = "content"
+    elif isinstance(reasoning_content, str) and reasoning_content.strip():
+        # 部分 OpenAI-compatible provider 会把 JSON-only 响应放在该字段。
+        content = reasoning_content
+        content_source = "reasoning_content"
+    else:
+        content_source = "empty"
+    finish_reason = getattr(choice, "finish_reason", None)
+    tool_calls = getattr(message, "tool_calls", None) if message is not None else None
+
+    return content or "{}", {
+        "choice_count": choice_count,
+        "finish_reason": str(finish_reason) if finish_reason is not None else None,
+        "content_source": content_source,
+        "content_chars": len(content),
+        "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()[:16] if content else None,
+        "has_refusal": bool(getattr(message, "refusal", None)) if message is not None else False,
+        "has_reasoning_content": bool(reasoning_content),
+        "has_tool_calls": bool(tool_calls),
+    }
 
 
 async def _discover_candidates_from_queries(
@@ -702,10 +800,35 @@ async def _evaluate_evidence(
     finally:
         if not client.is_closed():
             await client.close()
-    content = response.choices[0].message.content or "{}"
-    parsed = _parse_json_object(content)
+    content, response_diagnostics = _query_plan_response_details(response)
+    try:
+        parsed = _parse_json_object(content)
+    except Exception as exc:
+        logger.warning(
+            "Trend 评分返回无效 JSON model=%s choices=%d finish_reason=%s content_source=%s "
+            "content_chars=%d content_sha256=%s has_refusal=%s has_reasoning_content=%s "
+            "has_tool_calls=%s parse_error_type=%s evidence_count=%d",
+            model,
+            response_diagnostics["choice_count"],
+            response_diagnostics["finish_reason"],
+            response_diagnostics["content_source"],
+            response_diagnostics["content_chars"],
+            response_diagnostics["content_sha256"],
+            response_diagnostics["has_refusal"],
+            response_diagnostics["has_reasoning_content"],
+            response_diagnostics["has_tool_calls"],
+            type(exc).__name__,
+            len(evidence),
+        )
+        raise
     parsed["score"] = _score_value(parsed.get("score"))
-    logger.debug("Trend LLM 评分完成 score=%.1f evidence_count=%d", parsed["score"], len(evidence))
+    logger.debug(
+        "Trend LLM 评分完成 model=%s score=%.1f evidence_count=%d content_source=%s",
+        model,
+        parsed["score"],
+        len(evidence),
+        response_diagnostics["content_source"],
+    )
     return parsed
 
 
