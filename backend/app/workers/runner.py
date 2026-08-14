@@ -26,7 +26,7 @@ from ..services.settings.settings_snapshot import (
     snapshot_link_settings,
 )
 from ..services.trend.collector import collect_trends, maybe_enqueue_due_trend_run
-from ..services.trend.cleanup import purge_expired_deleted_trends
+from ..services.trend.cleanup import purge_expired_deleted_trends, soft_delete_stale_unfavorited_trends
 from ..services.ws_manager import manager
 
 logger = get_logger(__name__)
@@ -365,6 +365,7 @@ async def _worker_loop() -> None:
             if last_cleanup_at is None or now - last_cleanup_at >= CLEANUP_INTERVAL:
                 with SessionLocal() as session:
                     purge_expired_deleted_atoms(session)
+                    soft_delete_stale_unfavorited_trends(session, now)
                     purge_expired_deleted_trends(session, now)
                 last_cleanup_at = now
 

@@ -19,6 +19,8 @@ export interface TrendItem {
   resources: TrendResource[]
   first_seen_at: string
   last_seen_at: string
+  is_favorited: boolean
+  favorited_at: string | null
   created_at: string
   updated_at: string
 }

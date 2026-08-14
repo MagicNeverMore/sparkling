@@ -127,6 +127,8 @@ class TrendItem(Base):
     fingerprint: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(default=_now)
     last_seen_at: Mapped[datetime] = mapped_column(default=_now)
+    is_favorited: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    favorited_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime)

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -38,6 +38,8 @@ class TrendItemOut(BaseModel):
     resources: list[TrendResourceOut]
     first_seen_at: str
     last_seen_at: str
+    is_favorited: bool
+    favorited_at: Optional[str]
     created_at: str
     updated_at: str
 
@@ -45,6 +47,19 @@ class TrendItemOut(BaseModel):
 class TrendListOut(BaseModel):
     items: list[TrendItemOut]
     total: int
+
+
+class TrendFavoriteUpdate(BaseModel):
+    is_favorited: bool
+
+
+class TrendBulkDeleteRequest(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class TrendBulkDeleteOut(BaseModel):
+    deleted_count: int
+    deleted_ids: list[str]
 
 
 class TrendRunOut(BaseModel):
@@ -95,6 +110,8 @@ def _to_item_out(item: TrendItem) -> TrendItemOut:
         resources=resources,
         first_seen_at=utc_isoformat(item.first_seen_at),
         last_seen_at=utc_isoformat(item.last_seen_at),
+        is_favorited=item.is_favorited,
+        favorited_at=utc_isoformat(item.favorited_at) if item.favorited_at else None,
         created_at=utc_isoformat(item.created_at),
         updated_at=utc_isoformat(item.updated_at),
     )
@@ -193,6 +210,51 @@ def latest_trend_run(session: Session = Depends(get_session)) -> Optional[TrendR
     run = session.query(TrendRun).order_by(TrendRun.created_at.desc()).first()
     logger.debug("读取最新 Trend run found=%s", run is not None)
     return _to_run_out(run) if run else None
+
+
+@router.put("/{trend_id}/favorite", response_model=TrendItemOut)
+def update_trend_favorite(
+    trend_id: str,
+    body: TrendFavoriteUpdate,
+    session: Session = Depends(get_session),
+) -> TrendItemOut:
+    item = session.get(TrendItem, trend_id)
+    if not item or item.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Trend not found")
+    now = datetime.utcnow()
+    item.is_favorited = body.is_favorited
+    item.favorited_at = now if body.is_favorited else None
+    item.updated_at = now
+    session.commit()
+    session.refresh(item)
+    logger.info("Trend 收藏状态已更新 trend_id=%s is_favorited=%s", trend_id, item.is_favorited)
+    return _to_item_out(item)
+
+
+@router.post("/bulk-delete", response_model=TrendBulkDeleteOut)
+def bulk_delete_trends(
+    body: TrendBulkDeleteRequest,
+    session: Session = Depends(get_session),
+) -> TrendBulkDeleteOut:
+    ids = list(dict.fromkeys(body.ids))
+    items = (
+        session.query(TrendItem)
+        .filter(TrendItem.id.in_(ids))
+        .filter(TrendItem.deleted_at.is_(None))
+        .all()
+    )
+    now = datetime.utcnow()
+    deleted_ids = [item.id for item in items]
+    for item in items:
+        item.deleted_at = now
+        item.updated_at = now
+    session.commit()
+    logger.info(
+        "Trend 批量软删除完成 requested=%d deleted=%d",
+        len(ids),
+        len(deleted_ids),
+    )
+    return TrendBulkDeleteOut(deleted_count=len(deleted_ids), deleted_ids=deleted_ids)
 
 
 @router.get("/{trend_id}", response_model=TrendItemOut)
