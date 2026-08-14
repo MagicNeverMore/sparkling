@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, ExternalLink, RefreshCw, Search, Tag, Trash2 } from 'lucide-react'
+import { AlertCircle, CheckSquare, ExternalLink, RefreshCw, Search, Square, Star, Tag, Trash2 } from 'lucide-react'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import EmptyState from '../../components/EmptyState'
 import { useToast } from '../../components/useToast'
@@ -9,6 +9,11 @@ import { useI18n } from '../../lib/I18nProvider'
 import type { TrendItem, TrendListRaw, TrendRun } from './types'
 
 const sourceOptions = ['github', 'hackernews', 'rss']
+
+interface TrendBulkDeleteResult {
+  deleted_count: number
+  deleted_ids: string[]
+}
 
 export default function Trends() {
   const { lang, t } = useI18n()
@@ -26,6 +31,9 @@ export default function Trends() {
   const [reloadKey, setReloadKey] = useState(0)
   const [deleteTarget, setDeleteTarget] = useState<TrendItem | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   const selected = useMemo(
     () => items.find((item) => item.id === selectedId) ?? items[0] ?? null,
@@ -50,6 +58,7 @@ export default function Trends() {
       .then((result) => {
         setItems(result.items)
         setTotal(result.total)
+        setSelectedIds((current) => new Set([...current].filter((id) => result.items.some((item) => item.id === id))))
         if (!selectedId || !result.items.some((item) => item.id === selectedId)) {
           setSelectedId(result.items[0]?.id ?? null)
         }
@@ -111,6 +120,11 @@ export default function Trends() {
       setItems((current) => current.filter((item) => item.id !== deleteTarget.id))
       setTotal((current) => Math.max(0, current - 1))
       setSelectedId(null)
+      setSelectedIds((current) => {
+        const next = new Set(current)
+        next.delete(deleteTarget.id)
+        return next
+      })
       setDeleteTarget(null)
       show(t('trends.deleted'), 'success')
     } catch (error) {
@@ -118,6 +132,58 @@ export default function Trends() {
       show(t('trends.deleteFailed', { message }), 'error')
     } finally {
       setDeleting(false)
+    }
+  }
+
+  const toggleFavorite = async (item: TrendItem) => {
+    try {
+      const updated = await api.put<TrendItem>(`/api/trends/${item.id}/favorite`, {
+        is_favorited: !item.is_favorited,
+      })
+      setItems((current) => current.map((value) => (value.id === updated.id ? updated : value)))
+      show(t(updated.is_favorited ? 'trends.favorited' : 'trends.unfavorited'), 'success')
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(t('trends.favoriteFailed', { message }), 'error')
+    }
+  }
+
+  const toggleSelected = (trendId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(trendId)) next.delete(trendId)
+      else next.add(trendId)
+      return next
+    })
+  }
+
+  const allVisibleSelected = items.length > 0 && items.every((item) => selectedIds.has(item.id))
+
+  const toggleAllVisible = () => {
+    setSelectedIds((current) => {
+      if (allVisibleSelected) return new Set([...current].filter((id) => !items.some((item) => item.id === id)))
+      return new Set([...current, ...items.map((item) => item.id)])
+    })
+  }
+
+  const bulkDeleteTrends = async () => {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    setBulkDeleting(true)
+    try {
+      const result = await api.post<TrendBulkDeleteResult>('/api/trends/bulk-delete', { ids })
+      const deleted = new Set(result.deleted_ids)
+      setItems((current) => current.filter((item) => !deleted.has(item.id)))
+      setTotal((current) => Math.max(0, current - result.deleted_count))
+      setSelectedIds(new Set())
+      if (selectedId && deleted.has(selectedId)) setSelectedId(null)
+      setBulkDeleteOpen(false)
+      show(t('trends.bulkDeleted', { count: result.deleted_count }), 'success')
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
+      show(t('trends.bulkDeleteFailed', { message }), 'error')
+    } finally {
+      setBulkDeleting(false)
     }
   }
 
@@ -207,38 +273,69 @@ export default function Trends() {
         ) : (
           <div className="grid h-full min-h-[560px] md:grid-cols-[360px_1fr]">
             <div className="min-h-0 overflow-auto border-b border-slate-200 md:border-b-0 md:border-r dark:border-slate-800">
-              <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-3 py-2 text-xs text-slate-500 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
-                {t('trends.total', { count: total })}
+              <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 py-2 text-xs text-slate-500 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={toggleAllVisible}
+                    className="rounded p-0.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                    aria-label={allVisibleSelected ? t('trends.clearSelection') : t('trends.selectAll')}
+                    title={allVisibleSelected ? t('trends.clearSelection') : t('trends.selectAll')}
+                  >
+                    {allVisibleSelected ? <CheckSquare size={15} /> : <Square size={15} />}
+                  </button>
+                  <span>{t('trends.total', { count: total })}</span>
+                </div>
+                {selectedIds.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setBulkDeleteOpen(true)}
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-rose-500 transition hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                  >
+                    <Trash2 size={13} />
+                    {t('trends.bulkDelete', { count: selectedIds.size })}
+                  </button>
+                )}
               </div>
               {items.map((item) => (
-                <button
+                <div
                   key={item.id}
-                  type="button"
-                  onClick={() => setSelectedId(item.id)}
-                  className={`block w-full border-b border-slate-100 px-4 py-3 text-left transition dark:border-slate-800 ${
+                  className={`flex w-full items-start gap-2 border-b border-slate-100 px-3 py-3 text-left transition dark:border-slate-800 ${
                     selected?.id === item.id
                       ? 'bg-violet-50 dark:bg-slate-800'
                       : 'hover:bg-slate-50 dark:hover:bg-slate-950/60'
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="line-clamp-2 text-sm font-medium leading-5 text-slate-950 dark:text-slate-100">{item.title}</div>
-                      <div className="mt-1 text-xs text-slate-500">{formatRelative(item.last_seen_at, lang)}</div>
-                    </div>
-                    <span className="rounded-md border border-slate-200 px-2 py-1 font-mono text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300">
-                      {Math.round(item.score)}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {item.category && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500 dark:bg-slate-950 dark:text-slate-400">{item.category}</span>}
-                    {item.resources.slice(0, 2).map((resource) => (
-                      <span key={`${item.id}-${resource.url}`} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500 dark:bg-slate-950 dark:text-slate-400">
-                        {resource.source}
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(item.id)}
+                    onChange={() => toggleSelected(item.id)}
+                    className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 accent-violet-500 dark:border-slate-700"
+                    aria-label={t('trends.selectItem', { title: item.title })}
+                  />
+                  <button type="button" onClick={() => setSelectedId(item.id)} className="min-w-0 flex-1 text-left">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-start gap-1.5">
+                          {item.is_favorited && <Star size={14} className="mt-0.5 shrink-0 fill-amber-400 text-amber-400" aria-label={t('trends.favorited')} />}
+                          <div className="line-clamp-2 text-sm font-medium leading-5 text-slate-950 dark:text-slate-100">{item.title}</div>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">{formatRelative(item.last_seen_at, lang)}</div>
+                      </div>
+                      <span className="rounded-md border border-slate-200 px-2 py-1 font-mono text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300">
+                        {Math.round(item.score)}
                       </span>
-                    ))}
-                  </div>
-                </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {item.category && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500 dark:bg-slate-950 dark:text-slate-400">{item.category}</span>}
+                      {item.resources.slice(0, 2).map((resource) => (
+                        <span key={`${item.id}-${resource.url}`} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500 dark:bg-slate-950 dark:text-slate-400">
+                          {resource.source}
+                        </span>
+                      ))}
+                    </div>
+                  </button>
+                </div>
               ))}
             </div>
 
@@ -250,6 +347,19 @@ export default function Trends() {
                     <span className="rounded-md border border-slate-200 px-2 py-1 font-mono dark:border-slate-700">score {selected.score.toFixed(0)}</span>
                     <span>{formatDateTime(selected.last_seen_at, lang)}</span>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => void toggleFavorite(selected)}
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs transition ${
+                      selected.is_favorited
+                        ? 'bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-400'
+                        : 'text-slate-500 hover:bg-slate-100 hover:text-amber-500 dark:hover:bg-slate-800'
+                    }`}
+                    title={selected.is_favorited ? t('trends.unfavorite') : t('trends.favorite')}
+                  >
+                    <Star size={14} className={selected.is_favorited ? 'fill-current' : ''} aria-hidden="true" />
+                    {selected.is_favorited ? t('trends.unfavorite') : t('trends.favorite')}
+                  </button>
                   <button
                     type="button"
                     onClick={() => setDeleteTarget(selected)}
@@ -327,6 +437,16 @@ export default function Trends() {
         onConfirm={() => void deleteTrend()}
       >
         {t('trends.deleteConfirm', { title: deleteTarget?.title ?? '' })}
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={bulkDeleteOpen}
+        title={t('trends.bulkDeleteTitle')}
+        confirmLabel={t('common.delete')}
+        confirming={bulkDeleting}
+        onCancel={() => setBulkDeleteOpen(false)}
+        onConfirm={() => void bulkDeleteTrends()}
+      >
+        {t('trends.bulkDeleteConfirm', { count: selectedIds.size })}
       </ConfirmDialog>
     </div>
   )

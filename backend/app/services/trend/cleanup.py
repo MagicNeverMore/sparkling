@@ -11,6 +11,36 @@ from ...models import TrendItem
 logger = get_logger(__name__)
 
 TREND_SOFT_DELETE_RETENTION_DAYS = 30
+TREND_AUTO_DELETE_DAYS = 60
+
+
+def soft_delete_stale_unfavorited_trends(session: Session, now: datetime | None = None) -> int:
+    """软删除超过 60 天未更新、且未收藏的 Trend。"""
+    current_time = now or datetime.utcnow()
+    cutoff = current_time - timedelta(days=TREND_AUTO_DELETE_DAYS)
+    stale = (
+        session.query(TrendItem)
+        .filter(TrendItem.deleted_at.is_(None))
+        .filter(TrendItem.last_seen_at < cutoff)
+    )
+    scanned_count = stale.count()
+    favorited_skipped = stale.filter(TrendItem.is_favorited.is_(True)).count()
+    deleted_count = (
+        stale.filter(TrendItem.is_favorited.is_(False))
+        .update(
+            {TrendItem.deleted_at: current_time, TrendItem.updated_at: current_time},
+            synchronize_session=False,
+        )
+    )
+    session.commit()
+    logger.info(
+        "Trend 自动清理完成 scanned=%d soft_deleted=%d favorited_skipped=%d retention_days=%d",
+        scanned_count,
+        deleted_count,
+        favorited_skipped,
+        TREND_AUTO_DELETE_DAYS,
+    )
+    return deleted_count
 
 
 def purge_expired_deleted_trends(session: Session, now: datetime | None = None) -> int:
