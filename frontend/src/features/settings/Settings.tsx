@@ -1,16 +1,18 @@
 import { useEffect, useState, type ComponentType } from 'react'
-import { Brain, Database, Eye, EyeOff, Info, TrendingUp } from 'lucide-react'
+import { Brain, Database, Eye, EyeOff, Info, Share2, TrendingUp } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../../components/useToast'
 import { api, ApiError } from '../../lib/api'
 import { useSparklingStore } from '../../lib/store'
 import { useI18n } from '../../lib/I18nProvider'
 import TrendSettingsSection from '../trend/TrendSettingsSection'
 import type { TrendSettingsRaw } from '../trend/types'
+import SocialMediaSettingsSection from '../social-media/settings/SocialMediaSettingsSection'
 
 const dims = [384, 512, 768, 1024, 1536, 2048, 2560, 3072, 4096]
 
 type DatabaseBackend = 'sqlite' | 'postgresql'
-type SettingsSection = 'database' | 'ai' | 'trend'
+type SettingsSection = 'database' | 'ai' | 'trend' | 'social-media'
 
 interface DatabaseSettingsRaw {
   db_backend: DatabaseBackend
@@ -60,7 +62,8 @@ interface SettingsNavItem {
 export default function Settings() {
   const { t } = useI18n()
   const { show } = useToast()
-  const [activeSection, setActiveSection] = useState<SettingsSection>('database')
+  const [searchParams] = useSearchParams()
+  const [activeSection, setActiveSection] = useState<SettingsSection>(() => searchParams.get('section') === 'social-media' ? 'social-media' : 'database')
 
   const [embedBaseUrl, setEmbedBaseUrl] = useState('https://api.openai.com/v1')
   const [embedApiKey, setEmbedApiKey] = useState('')
@@ -111,6 +114,7 @@ export default function Settings() {
     { id: 'database', label: t('settings.database'), Icon: Database },
     { id: 'ai', label: t('settings.aiProvider'), Icon: Brain },
     { id: 'trend', label: t('settings.trend'), Icon: TrendingUp },
+    { id: 'social-media', label: t('socialMedia.settingsTitle'), Icon: Share2 },
   ]
 
   const loadAiSettings = () => {
@@ -786,6 +790,7 @@ export default function Settings() {
         )}
 
         {activeSection === 'trend' && <TrendSettingsSection />}
+        {activeSection === 'social-media' && <SocialMediaSettingsSection />}
       </div>
     </div>
   )

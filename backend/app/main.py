@@ -13,7 +13,7 @@ from .config import config
 from .db import DatabaseConnectionError, configure_current_database, get_database_backend, get_engine, uses_postgresql
 from .logger import get_logger, setup_logging
 from .migrations import run_migrations_for_engine
-from .routers import atoms, auth, graph, links, search, settings, tasks, trends, ws
+from .routers import atoms, auth, graph, links, search, settings, social_media, tasks, trends, ws
 from .runtime import start_background_worker, stop_background_worker
 from .services import auth as auth_service
 
@@ -105,6 +105,7 @@ app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(trends.router, prefix="/api/trends", tags=["trends"])
+app.include_router(social_media.router, prefix="/api/social-media", tags=["social-media"])
 app.include_router(ws.router, tags=["ws"])
 
 

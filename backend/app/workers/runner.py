@@ -14,7 +14,7 @@ import anyio
 
 from ..db import SessionLocal
 from ..logger import get_logger
-from ..models import Settings, TaskQueue, TrendRun
+from ..models import Settings, SocialMediaSyncRun, TaskQueue, TrendRun
 from ..services.memory.cleanup import purge_expired_deleted_atoms
 from ..services import task_queue as tq
 from ..services.memory.embedding import mark_atom_embedding_error, sync_atom_embedding
@@ -26,6 +26,7 @@ from ..services.settings.settings_snapshot import (
     snapshot_link_settings,
 )
 from ..services.trend.collector import collect_trends, maybe_enqueue_due_trend_run
+from ..services.social_media.collector import collect_social_media, maybe_enqueue_due_social_media_run
 from ..services.trend.cleanup import purge_expired_deleted_trends, soft_delete_stale_unfavorited_trends
 from ..services.ws_manager import manager
 
@@ -35,16 +36,19 @@ logger = get_logger(__name__)
 POLL_INTERVAL = 30.0
 CLEANUP_INTERVAL = timedelta(hours=24)
 TREND_SCHEDULER_INTERVAL = timedelta(minutes=1)
+SOCIAL_MEDIA_SCHEDULER_INTERVAL = timedelta(minutes=1)
 GLOBAL_CONCURRENCY_LIMIT = 3
 TASK_TYPE_CONCURRENCY_LIMITS = {
     "embed": 2,
     "link_discover": 1,
     "trend_collect": 1,
+    "social_media_collect": 1,
 }
 TASK_TIMEOUT_SECONDS = {
     "embed": 180,
     "link_discover": 60,
     "trend_collect": 1800,
+    "social_media_collect": 600,
 }
 TASK_LEASE_GRACE_SECONDS = 60
 SETTINGS_NOT_READY_RETRY_SECONDS = 30
@@ -110,10 +114,25 @@ async def _handle_trend_collect(payload: dict) -> None:
     )
 
 
+async def _handle_social_media_collect(payload: dict) -> None:
+    """处理 Social Media 日级采集并原子发布完整数据集。"""
+    run_id = payload.get("run_id")
+    if not run_id:
+        raise ValueError("social_media_collect 任务缺少 run_id")
+    result = await collect_social_media(run_id)
+    logger.info(
+        "social_media_collect 完成，run_id=%s metric_date=%s videos=%s",
+        run_id,
+        result["metric_date"],
+        result["video_count"],
+    )
+
+
 _HANDLERS = {
     "embed": _handle_embed,
     "link_discover": _handle_link_discover,
     "trend_collect": _handle_trend_collect,
+    "social_media_collect": _handle_social_media_collect,
 }
 
 
@@ -187,12 +206,14 @@ def _mark_task_failed(task: _ClaimedTask, exc: Exception) -> None:
             mark_atom_embedding_error(session, task.payload["atom_id"], str(exc))
         status = tq.mark_failed(session, task.id, str(exc))
         _sync_trend_run_after_task_failure(session, task, str(exc), status)
+        _sync_social_media_run_after_task_failure(session, task, str(exc), status)
 
 
 def _mark_task_released(task: _ClaimedTask, reason: str) -> None:
     with SessionLocal() as session:
         tq.release_running(session, task.id, reason)
         _sync_trend_run_after_task_failure(session, task, reason, "pending")
+        _sync_social_media_run_after_task_failure(session, task, reason, "pending")
 
 
 def _sync_trend_run_after_task_failure(
@@ -207,6 +228,31 @@ def _sync_trend_run_after_task_failure(
     if not run_id:
         return
     run = session.get(TrendRun, run_id)
+    if run is None:
+        return
+    now = datetime.utcnow()
+    if task_status == "failed":
+        run.status = "failed"
+        run.finished_at = now
+    else:
+        run.status = "pending"
+    run.error = error[:2000]
+    run.updated_at = now
+    session.commit()
+
+
+def _sync_social_media_run_after_task_failure(
+    session,  # noqa: ANN001
+    task: _ClaimedTask,
+    error: str,
+    task_status: str | None,
+) -> None:
+    if task.task_type != "social_media_collect":
+        return
+    run_id = task.payload.get("run_id")
+    if not run_id:
+        return
+    run = session.get(SocialMediaSyncRun, run_id)
     if run is None:
         return
     now = datetime.utcnow()
@@ -239,6 +285,8 @@ async def _execute_claimed_task(task: _ClaimedTask) -> bool:
         await _handle_link_discover(task.payload, settings.link)
     elif task.task_type == "trend_collect":
         await _handle_trend_collect(task.payload)
+    elif task.task_type == "social_media_collect":
+        await _handle_social_media_collect(task.payload)
     return True
 
 
@@ -356,6 +404,7 @@ async def _worker_loop() -> None:
     logger.info("Sparkling worker 已启动 worker_id=%s", worker_id)
     last_cleanup_at: datetime | None = None
     last_trend_schedule_check_at: datetime | None = None
+    last_social_media_schedule_check_at: datetime | None = None
     active_counts: dict[str, int] = {}
     active_task_ids: set[str] = set()
 
@@ -381,6 +430,16 @@ async def _worker_loop() -> None:
                         if run is not None:
                             logger.info("Trend 定时任务已入队，run_id=%s", run.id)
                 last_trend_schedule_check_at = now
+
+            if (
+                last_social_media_schedule_check_at is None
+                or now - last_social_media_schedule_check_at >= SOCIAL_MEDIA_SCHEDULER_INTERVAL
+            ):
+                with SessionLocal() as session:
+                    run = maybe_enqueue_due_social_media_run(session, now)
+                    if run is not None:
+                        logger.info("Social Media 定时任务已入队，run_id=%s", run.id)
+                last_social_media_schedule_check_at = now
 
             started = await _start_available_tasks(
                 task_group,

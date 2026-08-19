@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react'
+import { Menu } from 'lucide-react'
 import BottomTabBar from '../components/BottomTabBar'
 import ConnectionDot from '../components/ConnectionDot'
+import MobileNavDrawer from '../components/MobileNavDrawer'
 import SideNav from '../components/SideNav'
 import { useSparklingStore } from '../lib/store'
 
@@ -16,6 +18,7 @@ export default function AppShell({ children }: Props) {
   const [navCollapsed, setNavCollapsed] = useState(() => {
     return localStorage.getItem('sparkling-nav-collapsed') === 'true'
   })
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   const toggleNav = () => {
     setNavCollapsed((prev) => {
@@ -30,8 +33,13 @@ export default function AppShell({ children }: Props) {
       <SideNav atoms={atoms} wsStatus={wsStatus} collapsed={navCollapsed} onToggle={toggleNav} />
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 移动端顶部 header */}
-        <header className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 md:hidden dark:border-slate-800 dark:bg-slate-950">
-          <span className="text-sm font-semibold">✨ Sparkling</span>
+        <header className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 md:hidden dark:border-slate-800 dark:bg-slate-950">
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => setMobileNavOpen(true)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-900" aria-label="Open navigation">
+              <Menu size={20} />
+            </button>
+            <span className="text-sm font-semibold">✨ Sparkling</span>
+          </div>
           <ConnectionDot status={wsStatus} />
         </header>
         <main className="min-h-0 flex-1 overflow-auto pb-20 md:pb-0">
@@ -49,6 +57,7 @@ export default function AppShell({ children }: Props) {
         </main>
       </div>
       <BottomTabBar />
+      <MobileNavDrawer open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
     </div>
   )
 }
