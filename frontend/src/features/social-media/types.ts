@@ -35,7 +35,7 @@ export interface SocialMediaRun {
 
 export interface SocialMediaSettings {
   schedule_enabled: boolean
-  update_frequency: 'daily' | 'weekly' | 'manual'
+  update_frequency: 'hourly' | 'manual'
   schedule_time: string
   timezone: string
   youtube_client_id: string | null
