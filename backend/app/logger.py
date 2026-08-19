@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 import sys
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -17,12 +19,34 @@ from pathlib import Path
 # 日志根目录：backend/logs/（app/logger.py → 上两级 = backend/）
 LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 
-# 全局日志级别，可由环境变量覆盖
-LOG_LEVEL = logging.DEBUG
-LOG_FORMAT = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
+# 全局日志级别与保留天数可由环境变量覆盖
+LOG_LEVEL_NAME = os.getenv("SPARKLING_LOG_LEVEL", "DEBUG").upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.DEBUG)
+LOG_RETENTION_DAYS = max(1, int(os.getenv("SPARKLING_LOG_RETENTION_DAYS", "30")))
+LOG_FORMAT = "%(asctime)s | pid=%(process)d | %(levelname)-7s | %(name)s | %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+_SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)(client_secret|refresh_token|access_token|oauth_state|"
+    r"(?:^|[?&\s])(code|state))([=:]\s*|%3[dD])([^&\s,;]+)"
+)
+_BEARER_TOKEN = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+")
+
 _initialized = False
+
+
+def redact_log_text(value: object) -> str:
+    """对日志文本做兜底脱敏，避免 OAuth 凭据进入统一日志文件。"""
+    text = str(value)
+    text = _BEARER_TOKEN.sub(r"\1[REDACTED]", text)
+    return _SENSITIVE_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+
+
+class _SensitiveDataFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redact_log_text(record.getMessage())
+        record.args = ()
+        return True
 
 
 def _ensure_log_dir() -> Path:
@@ -46,6 +70,7 @@ def setup_logging() -> None:
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(LOG_LEVEL)
     console.setFormatter(formatter)
+    console.addFilter(_SensitiveDataFilter())
     root.addHandler(console)
 
     # ── 文件 handler：按天轮转，保留 30 天 ──
@@ -54,11 +79,12 @@ def setup_logging() -> None:
         filename=log_dir / "sparkling.log",
         when="midnight",
         interval=1,
-        backupCount=30,
+        backupCount=LOG_RETENTION_DAYS,
         encoding="utf-8",
     )
     file_handler.setLevel(LOG_LEVEL)
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(_SensitiveDataFilter())
     root.addHandler(file_handler)
 
     # ── 错误日志单独文件 ──
@@ -66,11 +92,12 @@ def setup_logging() -> None:
         filename=log_dir / "error.log",
         when="midnight",
         interval=1,
-        backupCount=30,
+        backupCount=LOG_RETENTION_DAYS,
         encoding="utf-8",
     )
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(formatter)
+    error_handler.addFilter(_SensitiveDataFilter())
     root.addHandler(error_handler)
 
     # 降低第三方库的日志噪音
@@ -80,7 +107,12 @@ def setup_logging() -> None:
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     logging.getLogger("alembic").setLevel(logging.WARNING)
 
-    root.info("日志系统初始化完成，日志目录：%s", LOG_DIR)
+    root.info(
+        "日志系统初始化完成 log_dir=%s level=%s retention_days=%s",
+        LOG_DIR,
+        LOG_LEVEL_NAME,
+        LOG_RETENTION_DAYS,
+    )
 
 
 def get_logger(name: str) -> logging.Logger:

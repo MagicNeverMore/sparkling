@@ -198,7 +198,7 @@ def _ensure_control_db() -> None:
             CREATE TABLE IF NOT EXISTS social_media_config (
               id INTEGER PRIMARY KEY CHECK (id = 1),
               schedule_enabled INTEGER NOT NULL DEFAULT 1,
-              update_frequency TEXT NOT NULL DEFAULT 'daily',
+              update_frequency TEXT NOT NULL DEFAULT 'hourly',
               schedule_time TEXT NOT NULL DEFAULT '09:00',
               timezone TEXT NOT NULL DEFAULT 'UTC',
               youtube_client_id TEXT,
@@ -222,9 +222,19 @@ def _ensure_control_db() -> None:
             """
             INSERT OR IGNORE INTO social_media_config (
               id, schedule_enabled, update_frequency, schedule_time, timezone, created_at, updated_at
-            ) VALUES (1, 1, 'daily', '09:00', 'UTC', ?, ?)
+            ) VALUES (1, 1, 'hourly', '09:00', 'UTC', ?, ?)
             """,
             (now, now),
+        )
+        # 旧版的 daily/weekly 表示抓取计划；现在统一升级为每小时查询，
+        # 指标数据本身仍由 YouTube report 的 metric_date 保持日级。
+        conn.execute(
+            """
+            UPDATE social_media_config
+            SET update_frequency = 'hourly', next_run_at = NULL, updated_at = ?
+            WHERE update_frequency IN ('daily', 'weekly')
+            """,
+            (now,),
         )
         conn.commit()
     logger.debug("control DB schema 已确认 path=%s", CONTROL_DB_PATH)

@@ -6,16 +6,20 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from ...db import SessionLocal
+from ...logger import get_logger
 from ...models import (
     SocialMediaDataset,
     SocialMediaSyncRun,
     SocialMediaVideoSnapshot,
     TaskQueue,
 )
-from ...time_utils import get_timezone, local_to_utc_naive, utc_isoformat, utc_naive_to_local
+from ...time_utils import utc_isoformat
 from .. import task_queue as tq
 from .config import load_social_media_config, update_social_media_config
 from .youtube import fetch_daily_dataset
+
+logger = get_logger(__name__)
+SOCIAL_MEDIA_MAX_ATTEMPTS = 48
 
 
 def enqueue_social_media_run(session: Session, trigger: str = "manual") -> SocialMediaSyncRun:
@@ -26,6 +30,12 @@ def enqueue_social_media_run(session: Session, trigger: str = "manual") -> Socia
         .first()
     )
     if active is not None:
+        logger.info(
+            "social_media.sync.enqueue.reused run_id=%s trigger=%s status=%s",
+            active.id,
+            trigger,
+            active.status,
+        )
         return active
     config = load_social_media_config()
     run = SocialMediaSyncRun(
@@ -42,6 +52,14 @@ def enqueue_social_media_run(session: Session, trigger: str = "manual") -> Socia
         "social_media_collect",
         {"run_id": run.id},
         resource_key="social_media:youtube",
+        max_attempts=SOCIAL_MEDIA_MAX_ATTEMPTS,
+    )
+    logger.info(
+        "social_media.sync.enqueued run_id=%s trigger=%s channel_id=%s max_attempts=%s",
+        run.id,
+        trigger,
+        config.youtube_channel_id,
+        SOCIAL_MEDIA_MAX_ATTEMPTS,
     )
     return run
 
@@ -58,6 +76,7 @@ def maybe_enqueue_due_social_media_run(
     if next_run is None:
         next_run = calculate_next_run_at(config.update_frequency, config.schedule_time, config.timezone, now)
         update_social_media_config(next_run_at=utc_isoformat(next_run))
+        logger.info("social_media.schedule.initialized next_run_at=%s", utc_isoformat(next_run))
         return None
     if next_run > now:
         return None
@@ -73,12 +92,18 @@ def maybe_enqueue_due_social_media_run(
         .first()
     )
     if active_task or active_run:
+        logger.info(
+            "social_media.schedule.due_but_active task_id=%s run_id=%s",
+            active_task.id if active_task else None,
+            active_run.id if active_run else None,
+        )
         return None
     update_social_media_config(
         next_run_at=utc_isoformat(
             calculate_next_run_at(config.update_frequency, config.schedule_time, config.timezone, now)
         )
     )
+    logger.info("social_media.schedule.due enqueue_at=%s", utc_isoformat(now))
     return enqueue_social_media_run(session, "scheduled")
 
 
@@ -88,20 +113,18 @@ def calculate_next_run_at(
     timezone_name: str,
     now: datetime | None = None,
 ) -> datetime:
+    """计算下一次 report 查询时间；指标仍按 YouTube metric_date 日级保存。"""
     now = now or datetime.utcnow()
-    local_now = utc_naive_to_local(now, timezone_name)
-    try:
-        hour, minute = (int(part) for part in schedule_time.split(":"))
-    except (TypeError, ValueError):
-        hour, minute = 9, 0
-    get_timezone(timezone_name)
-    candidate = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if candidate <= local_now:
-        candidate += timedelta(days=7 if frequency == "weekly" else 1)
-    return local_to_utc_naive(candidate)
+    if frequency != "hourly":
+        logger.warning(
+            "social_media.schedule.legacy_frequency normalized_to_hourly frequency=%s",
+            frequency,
+        )
+    return now + timedelta(hours=1)
 
 
 async def collect_social_media(run_id: str) -> dict[str, int | str]:
+    logger.info("social_media.sync.start run_id=%s", run_id)
     with SessionLocal() as session:
         run = session.get(SocialMediaSyncRun, run_id)
         if run is None:
@@ -114,6 +137,13 @@ async def collect_social_media(run_id: str) -> dict[str, int | str]:
     config = load_social_media_config()
     dataset = await fetch_daily_dataset(config)
     collected_at = datetime.utcnow()
+    logger.info(
+        "social_media.sync.dataset_ready run_id=%s channel_id=%s metric_date=%s videos=%s",
+        run_id,
+        dataset.channel_id,
+        dataset.metric_date,
+        len(dataset.videos),
+    )
 
     with SessionLocal() as session:
         # (platform, account, metric_date) 唯一；同日重跑整批替换，不产生重复指标行。
@@ -125,6 +155,7 @@ async def collect_social_media(run_id: str) -> dict[str, int | str]:
             .one_or_none()
         )
         if stored is None:
+            publish_mode = "insert"
             stored = SocialMediaDataset(
                 platform="youtube",
                 external_account_id=dataset.channel_id,
@@ -135,12 +166,20 @@ async def collect_social_media(run_id: str) -> dict[str, int | str]:
             session.add(stored)
             session.flush()
         else:
-            session.query(SocialMediaVideoSnapshot).filter(
+            publish_mode = "replace"
+            replaced_count = session.query(SocialMediaVideoSnapshot).filter(
                 SocialMediaVideoSnapshot.dataset_id == stored.id
             ).delete(synchronize_session=False)
             stored.status = "complete"
             stored.collected_at = collected_at
             stored.updated_at = collected_at
+            logger.info(
+                "social_media.sync.same_day_replace run_id=%s dataset_id=%s metric_date=%s removed_snapshots=%s",
+                run_id,
+                stored.id,
+                dataset.metric_date,
+                replaced_count,
+            )
 
         for video in dataset.videos:
             metrics = dataset.metrics_by_video[video.video_id]
@@ -171,6 +210,14 @@ async def collect_social_media(run_id: str) -> dict[str, int | str]:
         run.finished_at = collected_at
         run.updated_at = collected_at
         session.commit()
+        logger.info(
+            "social_media.sync.published run_id=%s dataset_id=%s mode=%s metric_date=%s videos=%s",
+            run_id,
+            stored.id,
+            publish_mode,
+            dataset.metric_date,
+            len(dataset.videos),
+        )
 
     current = load_social_media_config()
     update_social_media_config(
@@ -189,6 +236,13 @@ async def collect_social_media(run_id: str) -> dict[str, int | str]:
             if current.schedule_enabled and current.update_frequency != "manual"
             else None
         ),
+    )
+    logger.info(
+        "social_media.sync.done run_id=%s metric_date=%s videos=%s collected_at=%s",
+        run_id,
+        dataset.metric_date,
+        len(dataset.videos),
+        utc_isoformat(collected_at),
     )
     return {"metric_date": dataset.metric_date, "video_count": len(dataset.videos)}
 

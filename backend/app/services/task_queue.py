@@ -174,7 +174,14 @@ def mark_done(session: Session, task_id: str) -> None:
         logger.debug("任务已完成 id=%s type=%s", task.id, task.task_type)
 
 
-def mark_failed(session: Session, task_id: str, error: str, max_attempts: int | None = None) -> str | None:
+def mark_failed(
+    session: Session,
+    task_id: str,
+    error: str,
+    max_attempts: int | None = None,
+    *,
+    retry_delay_seconds: int | None = None,
+) -> str | None:
     """标记任务失败；未达最大重试次数则重置为 pending 允许重试。"""
     task = session.get(TaskQueue, task_id)
     if not task:
@@ -191,11 +198,17 @@ def mark_failed(session: Session, task_id: str, error: str, max_attempts: int | 
         logger.warning("任务 %s 超过最大重试次数，标记为 failed: %s", task_id, error)
     else:
         task.status = "pending"
-        task.available_at = now + timedelta(seconds=_retry_delay_seconds(task.attempts))
+        delay_seconds = (
+            max(1, retry_delay_seconds)
+            if retry_delay_seconds is not None
+            else _retry_delay_seconds(task.attempts)
+        )
+        task.available_at = now + timedelta(seconds=delay_seconds)
         logger.info(
-            "任务 %s 失败，将重试（attempts=%d available_at=%s）: %s",
+            "任务 %s 失败，将重试（attempts=%d delay_seconds=%s available_at=%s）: %s",
             task_id,
             task.attempts,
+            delay_seconds,
             task.available_at,
             error,
         )

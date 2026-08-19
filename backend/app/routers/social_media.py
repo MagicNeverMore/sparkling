@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
+from ..config import config as app_config
 from ..db import get_session
 from ..logger import get_logger
 from ..models import SocialMediaDataset, SocialMediaSyncRun, SocialMediaVideoSnapshot
@@ -38,8 +40,8 @@ class SocialMediaSettingsUpdate(BaseModel):
     @field_validator("update_frequency")
     @classmethod
     def validate_frequency(cls, value: str | None) -> str | None:
-        if value is not None and value not in {"daily", "weekly", "manual"}:
-            raise ValueError("update_frequency must be daily, weekly or manual")
+        if value is not None and value not in {"hourly", "manual"}:
+            raise ValueError("update_frequency must be hourly or manual")
         return value
 
     @field_validator("schedule_time")
@@ -122,6 +124,23 @@ def _masked(value: str | None) -> str | None:
     return f"••••{value[-4:]}" if len(value) > 4 else "••••"
 
 
+def _youtube_oauth_redirect_uri(request: Request) -> str:
+    """OAuth callback 使用前端公开 origin，避免 Vite proxy 泄漏后端 host/port。"""
+    callback_path = request.app.url_path_for("youtube_oauth_callback")
+    dev_origin = app_config.dev_origin.rstrip("/")
+    if dev_origin:
+        return f"{dev_origin}{callback_path}"
+    return str(request.url_for("youtube_oauth_callback"))
+
+
+def _oauth_frontend_origin(request: Request, redirect_uri: str | None) -> str:
+    if redirect_uri:
+        parsed = urlsplit(redirect_uri)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    return str(request.base_url).rstrip("/")
+
+
 def _settings_out() -> SocialMediaSettingsOut:
     config = load_social_media_config()
     return SocialMediaSettingsOut(
@@ -177,13 +196,22 @@ def update_social_media_settings(body: SocialMediaSettingsUpdate) -> SocialMedia
         else None
     )
     update_social_media_config(**fields)
+    logger.info(
+        "social_media.settings.updated fields=%s",
+        sorted(name for name in fields if name not in {"youtube_client_secret"}),
+    )
     return _settings_out()
 
 
 @router.get("/youtube/oauth/start", response_model=OAuthUrlOut)
 def start_youtube_oauth(request: Request) -> OAuthUrlOut:
     config = load_social_media_config()
-    redirect_uri = str(request.url_for("youtube_oauth_callback"))
+    redirect_uri = _youtube_oauth_redirect_uri(request)
+    logger.info(
+        "social_media.oauth.start redirect_uri=%s client_configured=%s",
+        redirect_uri,
+        bool(config.youtube_client_id and config.youtube_client_secret),
+    )
     try:
         return OAuthUrlOut(authorization_url=build_oauth_url(config, redirect_uri))
     except ValueError as exc:
@@ -197,11 +225,19 @@ async def youtube_oauth_callback(
     state: Optional[str] = Query(default=None),
     error: Optional[str] = Query(default=None),
 ):  # noqa: ANN201
-    frontend = f"{str(request.base_url).rstrip('/')}/settings?section=social-media"
+    config = load_social_media_config()
+    frontend_origin = _oauth_frontend_origin(request, config.oauth_redirect_uri)
+    frontend = f"{frontend_origin}/settings?section=social-media"
     if error or not code or not state:
+        logger.warning(
+            "social_media.oauth.callback.rejected google_error=%s has_code=%s has_state=%s",
+            error,
+            bool(code),
+            bool(state),
+        )
         return RedirectResponse(f"{frontend}&youtube=error")
+    logger.info("social_media.oauth.callback.received redirect_uri=%s", config.oauth_redirect_uri)
     try:
-        config = load_social_media_config()
         refresh_token, channel_id, channel_title = await exchange_oauth_code(config, code, state)
         next_run = (
             utc_isoformat(
@@ -221,12 +257,19 @@ async def youtube_oauth_callback(
     except Exception as exc:
         logger.exception("YouTube OAuth callback 失败: %s", exc)
         return RedirectResponse(f"{frontend}&youtube=error")
+    logger.info(
+        "social_media.oauth.callback.connected channel_id=%s channel_title=%s",
+        channel_id,
+        channel_title,
+    )
     return RedirectResponse(f"{frontend}&youtube=connected")
 
 
 @router.post("/youtube/disconnect", response_model=SocialMediaSettingsOut)
 def disconnect_youtube_account() -> SocialMediaSettingsOut:
+    current = load_social_media_config()
     disconnect_youtube()
+    logger.info("social_media.oauth.disconnected channel_id=%s", current.youtube_channel_id)
     return _settings_out()
 
 
@@ -235,7 +278,14 @@ def run_social_media_sync(session: Session = Depends(get_session)) -> SocialMedi
     config = load_social_media_config()
     if not config.youtube_connected:
         raise HTTPException(status_code=400, detail="请先在 Social Media Settings 连接 YouTube")
-    return _run_out(enqueue_social_media_run(session, "manual"))
+    run = enqueue_social_media_run(session, "manual")
+    logger.info(
+        "social_media.sync.manual_requested run_id=%s status=%s channel_id=%s",
+        run.id,
+        run.status,
+        config.youtube_channel_id,
+    )
+    return _run_out(run)
 
 
 @router.get("/runs/latest", response_model=Optional[SocialMediaRunOut])

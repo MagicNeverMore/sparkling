@@ -27,6 +27,7 @@ from ..services.settings.settings_snapshot import (
 )
 from ..services.trend.collector import collect_trends, maybe_enqueue_due_trend_run
 from ..services.social_media.collector import collect_social_media, maybe_enqueue_due_social_media_run
+from ..services.social_media.youtube import YouTubeReportsNotReadyError
 from ..services.trend.cleanup import purge_expired_deleted_trends, soft_delete_stale_unfavorited_trends
 from ..services.ws_manager import manager
 
@@ -200,11 +201,21 @@ def _mark_task_done(task_id: str) -> None:
         tq.mark_done(session, task_id)
 
 
-def _mark_task_failed(task: _ClaimedTask, exc: Exception) -> None:
+def _mark_task_failed(
+    task: _ClaimedTask,
+    exc: Exception,
+    *,
+    retry_delay_seconds: int | None = None,
+) -> None:
     with SessionLocal() as session:
         if task.task_type == "embed" and task.payload.get("atom_id"):
             mark_atom_embedding_error(session, task.payload["atom_id"], str(exc))
-        status = tq.mark_failed(session, task.id, str(exc))
+        status = tq.mark_failed(
+            session,
+            task.id,
+            str(exc),
+            retry_delay_seconds=retry_delay_seconds,
+        )
         _sync_trend_run_after_task_failure(session, task, str(exc), status)
         _sync_social_media_run_after_task_failure(session, task, str(exc), status)
 
@@ -305,6 +316,16 @@ async def _run_claimed_task(task: _ClaimedTask) -> None:
     except cancelled_exc:
         _mark_task_released(task, "worker cancelled")
         raise
+    except YouTubeReportsNotReadyError as exc:
+        logger.warning(
+            "social_media_collect 等待 YouTube 日报 task_id=%s retry_after_seconds=%s "
+            "activity_reports=%s reach_reports=%s",
+            task.id,
+            exc.retry_after_seconds,
+            exc.basic_count,
+            exc.reach_count,
+        )
+        _mark_task_failed(task, exc, retry_delay_seconds=exc.retry_after_seconds)
     except Exception as exc:
         logger.exception("任务 %s 执行失败: %s", task.id, exc)
         _mark_task_failed(task, exc)

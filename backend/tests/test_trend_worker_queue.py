@@ -229,6 +229,32 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(refreshed.locked_by)
         self.assertIsNone(refreshed.lease_until)
 
+    def test_mark_failed_accepts_long_retry_delay(self) -> None:
+        db, models, task_queue, _runner = _app_modules()
+        before = datetime.utcnow()
+        with db.SessionLocal() as session:
+            task = task_queue.enqueue(
+                session,
+                "social_media_collect",
+                {"run_id": "run-1"},
+                max_attempts=48,
+            )
+            claimed = task_queue.claim_next(session, worker_id="test-worker", lease_seconds=60)
+            assert claimed is not None
+            status = task_queue.mark_failed(
+                session,
+                claimed.id,
+                "reports not ready",
+                retry_delay_seconds=3600,
+            )
+            refreshed = session.get(models.TaskQueue, task.id)
+
+        self.assertEqual(status, "pending")
+        self.assertIsNotNone(refreshed)
+        assert refreshed is not None
+        self.assertEqual(refreshed.max_attempts, 48)
+        self.assertGreaterEqual(refreshed.available_at, before + timedelta(minutes=59))
+
 
 if __name__ == "__main__":
     unittest.main()
