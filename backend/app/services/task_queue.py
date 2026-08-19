@@ -75,6 +75,8 @@ def default_resource_key(task_type: str, payload: dict[str, Any] | None) -> str 
         return f"atom:{payload['atom_id']}"
     if task_type == "trend_collect":
         return "trend_collect"
+    if task_type == "social_media_collect":
+        return "social_media:youtube"
     return None
 
 

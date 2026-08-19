@@ -1,5 +1,6 @@
-import { NavLink } from 'react-router-dom'
-import { Inbox, Network, Search, CheckSquare, Settings, User, Moon, Sun, Monitor, ChevronLeft, ChevronRight, TrendingUp, type LucideIcon } from 'lucide-react'
+import { useState } from 'react'
+import { NavLink, useLocation } from 'react-router-dom'
+import { BarChart3, Inbox, Network, Search, CheckSquare, Settings, User, Moon, Sun, Monitor, ChevronDown, ChevronLeft, ChevronRight, TrendingUp, type LucideIcon } from 'lucide-react'
 import ConnectionDot from './ConnectionDot'
 import HeatmapGrid from '../features/memory/HeatmapGrid'
 import { navItems } from '../lib/navigation'
@@ -15,7 +16,7 @@ interface Props {
 }
 
 const navIconMap: Record<string, LucideIcon> = {
-  Inbox, Network, Search, TrendingUp, CheckSquare, Settings, User,
+  Inbox, Network, Search, TrendingUp, BarChart3, CheckSquare, Settings, User,
 }
 
 const themeIcons: Record<string, LucideIcon> = {
@@ -36,6 +37,8 @@ const navLinkClass = (isActive: boolean, iconOnly = false) =>
 export default function SideNav({ atoms, wsStatus, collapsed, onToggle }: Props) {
   const { lang, setLang, t } = useI18n()
   const { theme, setTheme, resolved } = useTheme()
+  const location = useLocation()
+  const [socialMediaOpen, setSocialMediaOpen] = useState(() => location.pathname.startsWith('/social-media'))
 
   const cycleTheme = () => {
     if (theme === 'system') {
@@ -87,10 +90,55 @@ export default function SideNav({ atoms, wsStatus, collapsed, onToggle }: Props)
         {navItems.map((item) => {
           const translated = t(item.labelKey)
           const Icon = navIconMap[item.icon]
+          if (item.children) {
+            const active = item.children.some((child) => location.pathname.startsWith(child.to))
+            const open = socialMediaOpen || active
+            return (
+              <div key={item.labelKey}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (collapsed) onToggle()
+                    setSocialMediaOpen((value) => !value)
+                  }}
+                  className={`${navLinkClass(active, collapsed)} w-full`}
+                  aria-expanded={open}
+                >
+                  {Icon && <Icon size={collapsed ? 20 : 18} className="shrink-0" />}
+                  {!collapsed && <span className="min-w-0 flex-1 text-left">{translated}</span>}
+                  {!collapsed && <ChevronDown size={16} className={`transition ${open ? 'rotate-180' : ''}`} />}
+                  {collapsed && (
+                    <span className="pointer-events-none absolute left-14 z-40 hidden whitespace-nowrap rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 shadow-xl group-hover:block dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
+                      {translated}
+                    </span>
+                  )}
+                </button>
+                {!collapsed && open && (
+                  <div className="ml-5 mt-1 border-l border-slate-200 pl-2 dark:border-slate-800">
+                    {item.children.map((child) => (
+                      <NavLink
+                        key={child.to}
+                        to={child.to}
+                        className={({ isActive }) =>
+                          `block rounded-md px-3 py-2 text-sm transition ${
+                            isActive
+                              ? 'bg-violet-50 text-slate-950 dark:bg-slate-900 dark:text-slate-100'
+                              : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-slate-100'
+                          }`
+                        }
+                      >
+                        {t(child.labelKey)}
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          }
           return (
             <NavLink
-              key={item.to}
-              to={item.to}
+              key={item.to!}
+              to={item.to!}
               className={({ isActive }) => navLinkClass(isActive, collapsed)}
             >
               {Icon ? <Icon size={collapsed ? 20 : 18} className="shrink-0" /> : <span className="w-5 text-center text-lg">{item.icon}</span>}

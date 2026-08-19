@@ -165,6 +165,75 @@ class TrendRun(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class SocialMediaDataset(Base):
+    """某个平台账号在一个指标日期上的完整日级数据集。"""
+
+    __tablename__ = "social_media_dataset"
+    __table_args__ = (
+        UniqueConstraint(
+            "platform",
+            "external_account_id",
+            "metric_date",
+            name="uq_social_media_dataset_account_date",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    platform: Mapped[str] = mapped_column(String, nullable=False)
+    external_account_id: Mapped[str] = mapped_column(String, nullable=False)
+    metric_date: Mapped[str] = mapped_column(String, nullable=False)  # YYYY-MM-DD，provider 报告日期
+    status: Mapped[str] = mapped_column(String, default="complete", nullable=False)
+    collected_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class SocialMediaVideoSnapshot(Base):
+    """数据集中一条 public 视频快照；同日重复同步时整批替换。"""
+
+    __tablename__ = "social_media_video_snapshot"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "external_video_id", name="uq_social_media_video_dataset"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("social_media_dataset.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    external_video_id: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    views: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ctr: Mapped[float | None] = mapped_column(Float)
+    average_view_duration_seconds: Mapped[float | None] = mapped_column(Float)
+    average_view_percentage: Mapped[float | None] = mapped_column(Float)
+    subscribers_gained: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    subscribers_lost: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    net_subscribers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class SocialMediaSyncRun(Base):
+    """采集运行日志；不会作为 List 的数据来源。"""
+
+    __tablename__ = "social_media_sync_run"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    platform: Mapped[str] = mapped_column(String, default="youtube", nullable=False)
+    external_account_id: Mapped[str | None] = mapped_column(String)
+    trigger: Mapped[str] = mapped_column(String, default="manual", nullable=False)
+    status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    metric_date: Mapped[str | None] = mapped_column(String)
+    video_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 class Settings(Base):
     """单行配置表。"""
 

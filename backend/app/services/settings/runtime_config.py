@@ -193,5 +193,38 @@ def _ensure_control_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS social_media_config (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              schedule_enabled INTEGER NOT NULL DEFAULT 1,
+              update_frequency TEXT NOT NULL DEFAULT 'daily',
+              schedule_time TEXT NOT NULL DEFAULT '09:00',
+              timezone TEXT NOT NULL DEFAULT 'UTC',
+              youtube_client_id TEXT,
+              youtube_client_secret TEXT,
+              youtube_refresh_token TEXT,
+              youtube_channel_id TEXT,
+              youtube_channel_title TEXT,
+              youtube_basic_job_id TEXT,
+              youtube_reach_job_id TEXT,
+              oauth_state TEXT,
+              oauth_redirect_uri TEXT,
+              last_run_at TEXT,
+              next_run_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+            """
+        )
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO social_media_config (
+              id, schedule_enabled, update_frequency, schedule_time, timezone, created_at, updated_at
+            ) VALUES (1, 1, 'daily', '09:00', 'UTC', ?, ?)
+            """,
+            (now, now),
+        )
         conn.commit()
     logger.debug("control DB schema 已确认 path=%s", CONTROL_DB_PATH)
