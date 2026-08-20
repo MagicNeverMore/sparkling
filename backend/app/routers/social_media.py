@@ -23,6 +23,7 @@ from ..services.social_media.config import (
     update_social_media_config,
 )
 from ..services.social_media.youtube import build_oauth_url, exchange_oauth_code
+from ..services.settings.deployment_config import load_deployment_config
 from ..time_utils import get_timezone, utc_isoformat
 
 router = APIRouter()
@@ -125,12 +126,15 @@ def _masked(value: str | None) -> str | None:
 
 
 def _youtube_oauth_redirect_uri(request: Request) -> str:
-    """OAuth callback 使用前端公开 origin，避免 Vite proxy 泄漏后端 host/port。"""
+    """生产使用 control DB 中的公开 origin；开发环境允许 dev origin。"""
     callback_path = request.app.url_path_for("youtube_oauth_callback")
+    public_origin = load_deployment_config().public_origin
+    if public_origin:
+        return f"{public_origin}{callback_path}"
     dev_origin = app_config.dev_origin.rstrip("/")
     if dev_origin:
         return f"{dev_origin}{callback_path}"
-    return str(request.url_for("youtube_oauth_callback"))
+    raise ValueError("请先在 Settings → Network / Deployment 配置 Public URL")
 
 
 def _oauth_frontend_origin(request: Request, redirect_uri: str | None) -> str:
@@ -206,13 +210,13 @@ def update_social_media_settings(body: SocialMediaSettingsUpdate) -> SocialMedia
 @router.get("/youtube/oauth/start", response_model=OAuthUrlOut)
 def start_youtube_oauth(request: Request) -> OAuthUrlOut:
     config = load_social_media_config()
-    redirect_uri = _youtube_oauth_redirect_uri(request)
-    logger.info(
-        "social_media.oauth.start redirect_uri=%s client_configured=%s",
-        redirect_uri,
-        bool(config.youtube_client_id and config.youtube_client_secret),
-    )
     try:
+        redirect_uri = _youtube_oauth_redirect_uri(request)
+        logger.info(
+            "social_media.oauth.start redirect_uri=%s client_configured=%s",
+            redirect_uri,
+            bool(config.youtube_client_id and config.youtube_client_secret),
+        )
         return OAuthUrlOut(authorization_url=build_oauth_url(config, redirect_uri))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

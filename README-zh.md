@@ -108,6 +108,9 @@ docker compose start
 | `SPARKLING_CONTROL_DB_PATH` | `/data/control.db` | 固定本地 SQLite 文件，用于保存数据库选择、认证用户和 session |
 | `SPARKLING_HOST` | `0.0.0.0` | 监听地址（Docker 内需要 `0.0.0.0`） |
 | `SPARKLING_DEV_ORIGIN` | (空) | 前端 dev server 的 CORS origin |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Uvicorn 信任的反向代理 IP/CIDR；Docker 部署应设置为 OpenResty 所在网段 |
+
+生产环境启动后，在 **Settings → Network / Deployment** 填写浏览器实际访问的 Public URL。该配置保存在固定的 control SQLite 中并立即生效，不需要重启容器；页面会自动生成可复制到 Google Console 的 YouTube OAuth redirect URI。
 
 在 `docker-compose.yml` 中修改对应 `environment` 字段。数据库后端选择保存在固定 control SQLite 中；请在页面 **Settings → 数据库** 中切换 SQLite/PostgreSQL，PostgreSQL URL 也保存在那里，不再写入 `.env`。
 

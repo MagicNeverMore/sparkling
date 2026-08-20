@@ -1,14 +1,22 @@
 import { ArrowLeft, Check, Copy, ExternalLink } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useI18n } from '../../lib/I18nProvider'
+import { api } from '../../lib/api'
+import type { DeploymentSettings } from '../settings/deployment/types'
 
 export default function YouTubeOAuthGuide() {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
-  const redirectUri = `${window.location.origin}/api/social-media/youtube/oauth/callback`
+  const [deployment, setDeployment] = useState<DeploymentSettings | null>(null)
+  const redirectUri = deployment?.youtube_callback_uri ?? ''
+
+  useEffect(() => {
+    void api.get<DeploymentSettings>('/api/settings/deployment').then(setDeployment)
+  }, [])
 
   const copyRedirectUri = async () => {
+    if (!redirectUri) return
     await navigator.clipboard.writeText(redirectUri)
     setCopied(true)
     window.setTimeout(() => setCopied(false), 2000)
@@ -64,12 +72,13 @@ export default function YouTubeOAuthGuide() {
         <h2 className="text-sm font-medium text-violet-800 dark:text-violet-200">{t('socialMedia.guide.callbackTitle')}</h2>
         <p className="mt-1 text-xs leading-5 text-violet-700/80 dark:text-violet-300/80">{t('socialMedia.guide.callbackHelp')}</p>
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-          <code className="min-w-0 flex-1 overflow-x-auto rounded-md border border-violet-200 bg-white px-3 py-2 text-xs text-slate-700 dark:border-violet-900 dark:bg-slate-950 dark:text-slate-200">{redirectUri}</code>
-          <button type="button" onClick={() => void copyRedirectUri()} className="inline-flex items-center justify-center gap-2 rounded-md bg-violet-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-violet-400">
+          <code className="min-w-0 flex-1 overflow-x-auto rounded-md border border-violet-200 bg-white px-3 py-2 text-xs text-slate-700 dark:border-violet-900 dark:bg-slate-950 dark:text-slate-200">{redirectUri || t('settings.publicUrlRequired')}</code>
+          <button type="button" onClick={() => void copyRedirectUri()} disabled={!redirectUri} className="inline-flex items-center justify-center gap-2 rounded-md bg-violet-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50">
             {copied ? <Check size={16} /> : <Copy size={16} />}
             {copied ? t('socialMedia.guide.copied') : t('socialMedia.guide.copy')}
           </button>
         </div>
+        {!redirectUri && <Link to="/settings?section=deployment" className="mt-3 inline-block text-sm font-medium text-violet-700 underline dark:text-violet-300">{t('settings.configurePublicUrl')}</Link>}
       </section>
 
       <ol className="space-y-4">

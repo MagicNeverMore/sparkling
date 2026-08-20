@@ -5,7 +5,10 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
+
+from fastapi import FastAPI, Request
 
 _TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "sparkling-social-media-reporting-test.db")
 _TEST_CONTROL_DB_PATH = os.path.join(
@@ -34,6 +37,83 @@ def _report(metric_date: str, create_time: str, report_id: str) -> dict[str, str
 
 
 class SocialMediaReportingTest(unittest.TestCase):
+    def test_deployment_public_origin_is_persisted_and_normalized(self) -> None:
+        from app.services.settings.deployment_config import (
+            load_deployment_config,
+            normalize_public_origin,
+            save_public_origin,
+        )
+        from app.services.settings import runtime_config
+
+        with tempfile.TemporaryDirectory() as directory:
+            control_db_path = Path(directory) / "control.db"
+            with patch.object(runtime_config, "CONTROL_DB_PATH", control_db_path):
+                save_public_origin("https://sparkling.nimbus2000.site:8443/")
+                self.assertEqual(
+                    load_deployment_config().public_origin,
+                    "https://sparkling.nimbus2000.site:8443",
+                )
+        with self.assertRaises(ValueError):
+            normalize_public_origin("https://sparkling.nimbus2000.site:8443/api")
+        with self.assertRaises(ValueError):
+            normalize_public_origin("http://sparkling.nimbus2000.site:8443")
+
+    def test_oauth_redirect_uses_runtime_public_origin(self) -> None:
+        from app.routers import social_media
+
+        app = FastAPI()
+        app.include_router(social_media.router, prefix="/api/social-media")
+        request = Request(
+            {
+                "type": "http",
+                "scheme": "http",
+                "server": ("sparkling", 3721),
+                "client": ("172.18.0.3", 12345),
+                "headers": [(b"host", b"sparkling:3721")],
+                "app": app,
+            }
+        )
+        deployment = SimpleNamespace(public_origin="https://sparkling.nimbus2000.site:8443")
+        configured = SimpleNamespace(dev_origin="")
+
+        with (
+            patch.object(social_media, "load_deployment_config", return_value=deployment, create=True),
+            patch.object(social_media, "app_config", configured),
+        ):
+            redirect_uri = social_media._youtube_oauth_redirect_uri(request)
+
+        self.assertEqual(
+            redirect_uri,
+            "https://sparkling.nimbus2000.site:8443/api/social-media/youtube/oauth/callback",
+        )
+
+    def test_oauth_redirect_requires_runtime_origin_in_production(self) -> None:
+        from app.routers import social_media
+
+        app = FastAPI()
+        app.include_router(social_media.router, prefix="/api/social-media")
+        request = Request(
+            {
+                "type": "http",
+                "scheme": "http",
+                "server": ("sparkling", 3721),
+                "client": ("172.18.0.3", 12345),
+                "headers": [(b"host", b"sparkling:3721")],
+                "app": app,
+            }
+        )
+
+        with (
+            patch.object(
+                social_media,
+                "load_deployment_config",
+                return_value=SimpleNamespace(public_origin=None),
+            ),
+            patch.object(social_media, "app_config", SimpleNamespace(dev_origin="")),
+            self.assertRaisesRegex(ValueError, "Public URL"),
+        ):
+            social_media._youtube_oauth_redirect_uri(request)
+
     def test_automatic_query_runs_one_hour_later(self) -> None:
         from app.services.social_media.collector import calculate_next_run_at
 

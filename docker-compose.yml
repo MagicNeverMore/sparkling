@@ -16,6 +16,8 @@ services:
       - SPARKLING_HOST=0.0.0.0
       - SPARKLING_PORT=3721
       - SPARKLING_DEV_ORIGIN=
+      # 设置为 OpenResty 容器的 IP/CIDR，用于识别可信 Proxy Headers。
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
     restart: unless-stopped
 
 volumes:

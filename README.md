@@ -108,6 +108,9 @@ All optional, defaults suitable for local Docker deployment:
 | `SPARKLING_CONTROL_DB_PATH` | `/data/control.db` | Fixed local SQLite file for database selection, auth user, and sessions |
 | `SPARKLING_HOST` | `0.0.0.0` | Listen address (`0.0.0.0` required inside Docker) |
 | `SPARKLING_DEV_ORIGIN` | (empty) | CORS origin for frontend dev server |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Reverse-proxy IP/CIDR trusted by Uvicorn; set this to the OpenResty network for Docker deployments |
+
+After starting a production deployment, enter the browser-facing Public URL under **Settings → Network / Deployment**. It is stored in the fixed control SQLite database and takes effect immediately without a container restart. The page generates the exact YouTube OAuth redirect URI to copy into Google Console.
 
 Modify the corresponding `environment` fields in `docker-compose.yml`. Database backend selection is stored in the fixed control SQLite database. Switch between SQLite/PostgreSQL on the **Settings → Database** page; PostgreSQL URLs are saved there, not in `.env`.
 

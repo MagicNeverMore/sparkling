@@ -6,17 +6,23 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..config import config
 from ..db import DatabaseConnectionError, get_session, switch_database
 from ..logger import get_logger
 from ..models import AtomEmbedding, Settings, TaskQueue, ThoughtAtom, ThoughtLink, TrendRssSource
 from ..runtime import start_background_worker, stop_background_worker
 from ..services import task_queue as tq
 from ..services.settings.runtime_config import build_database_config, get_database_config
+from ..services.settings.deployment_config import (
+    load_deployment_config,
+    normalize_public_origin,
+    save_public_origin,
+)
 from ..services.memory.embedding import atom_content_hash, embed_texts, test_provider
 from ..services.ai.chat import test_chat_provider
 from ..services.settings.settings_snapshot import snapshot_chat_settings, snapshot_embedding_settings, snapshot_trend_settings
@@ -63,6 +69,43 @@ class DatabaseSettingsUpdate(BaseModel):
         if value not in {"sqlite", "postgresql"}:
             raise ValueError("db_backend must be sqlite or postgresql")
         return value
+
+
+class DeploymentSettingsUpdate(BaseModel):
+    public_origin: Optional[str] = None
+
+    @field_validator("public_origin")
+    @classmethod
+    def validate_public_origin(cls, value: str | None) -> str | None:
+        return normalize_public_origin(value)
+
+
+class DeploymentSettingsOut(BaseModel):
+    public_origin: Optional[str]
+    effective_origin: Optional[str]
+    youtube_callback_uri: Optional[str]
+    source: str
+    restart_required: bool = False
+
+
+def _deployment_settings_out(request: Request) -> DeploymentSettingsOut:
+    stored_origin = load_deployment_config().public_origin
+    if stored_origin:
+        effective_origin = stored_origin
+        source = "saved"
+    elif config.dev_origin:
+        effective_origin = config.dev_origin.rstrip("/")
+        source = "development"
+    else:
+        effective_origin = None
+        source = "unconfigured"
+    callback_path = request.app.url_path_for("youtube_oauth_callback")
+    return DeploymentSettingsOut(
+        public_origin=stored_origin,
+        effective_origin=effective_origin,
+        youtube_callback_uri=f"{effective_origin}{callback_path}" if effective_origin else None,
+        source=source,
+    )
 
 
 class SettingsOut(BaseModel):
@@ -599,6 +642,21 @@ def delete_trend_rss_source(source_id: str, session: Session = Depends(get_sessi
 async def get_database_settings() -> DatabaseSettingsOut:
     """获取数据库后端配置。此接口不依赖数据库连接。"""
     return DatabaseSettingsOut(**get_database_config())
+
+
+@router.get("/deployment", response_model=DeploymentSettingsOut)
+async def get_deployment_settings(request: Request) -> DeploymentSettingsOut:
+    """获取即时生效的部署地址配置。"""
+    return _deployment_settings_out(request)
+
+
+@router.put("/deployment", response_model=DeploymentSettingsOut)
+async def update_deployment_settings(
+    request: Request,
+    body: DeploymentSettingsUpdate,
+) -> DeploymentSettingsOut:
+    save_public_origin(body.public_origin)
+    return _deployment_settings_out(request)
 
 
 @router.put("/database", response_model=DatabaseSettingsOut)
