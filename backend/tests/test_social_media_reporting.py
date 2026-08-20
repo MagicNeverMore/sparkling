@@ -247,7 +247,7 @@ class SocialMediaReportingTest(unittest.TestCase):
 
         self.assertEqual(caught.exception.basic_count, 1)
         self.assertEqual(caught.exception.reach_count, 0)
-        self.assertEqual(caught.exception.retry_after_seconds, 3600)
+        self.assertNotIn("自动重试", str(caught.exception))
 
     def test_latest_common_date_and_newest_version_are_selected(self) -> None:
         youtube = _youtube_module()

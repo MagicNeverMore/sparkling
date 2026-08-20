@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { api, ApiError } from '../../lib/api'
 import { useI18n } from '../../lib/I18nProvider'
 import { useToast } from '../../components/useToast'
-import type { SocialMediaListResponse, SocialMediaRun } from './types'
+import type { SocialMediaListResponse, SocialMediaRun, SocialMediaSyncRequest } from './types'
 
 const formatDuration = (seconds: number | null) => {
   if (seconds === null) return '—'
@@ -30,7 +30,7 @@ export default function SocialMediaList() {
   const [data, setData] = useState<SocialMediaListResponse | null>(null)
   const [run, setRun] = useState<SocialMediaRun | null>(null)
   const [loading, setLoading] = useState(true)
-  const syncing = run?.status === 'pending' || run?.status === 'running'
+  const syncing = run?.status === 'running'
 
   const load = useCallback(async () => {
     try {
@@ -64,16 +64,15 @@ export default function SocialMediaList() {
     return () => { active = false }
   }, [show, t])
   useEffect(() => {
-    if (!syncing) return
-    const timer = window.setInterval(() => void load(), 3000)
+    const timer = window.setInterval(() => void load(), 5000)
     return () => window.clearInterval(timer)
-  }, [load, syncing])
+  }, [load])
 
   const syncNow = async () => {
     try {
-      const next = await api.post<SocialMediaRun>('/api/social-media/sync')
-      setRun(next)
+      await api.post<SocialMediaSyncRequest>('/api/social-media/sync')
       show(t('socialMedia.syncStarted'), 'success')
+      await load()
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : String(error)
       show(message, 'error')

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...db import SessionLocal
@@ -19,55 +20,141 @@ from .config import load_social_media_config, update_social_media_config
 from .youtube import fetch_daily_dataset
 
 logger = get_logger(__name__)
-SOCIAL_MEDIA_MAX_ATTEMPTS = 48
 
 
-def enqueue_social_media_run(session: Session, trigger: str = "manual") -> SocialMediaSyncRun:
+def _get_or_recover_sync_run(
+    session: Session,
+    run_id: str,
+    *,
+    phase: str,
+) -> SocialMediaSyncRun:
+    """恢复历史遗留或热切库产生的孤儿采集任务。"""
+    run = session.get(SocialMediaSyncRun, run_id)
+    if run is not None:
+        return run
+
+    run = SocialMediaSyncRun(
+        id=run_id,
+        platform="youtube",
+        trigger="recovered",
+        status="running",
+    )
+    session.add(run)
+    session.flush()
+    logger.warning(
+        "social_media.sync.run_recovered run_id=%s phase=%s reason=orphan_task",
+        run_id,
+        phase,
+    )
+    return run
+
+
+def enqueue_social_media_task(session: Session, trigger: str = "manual") -> TaskQueue:
+    """提交独立采集任务；run 由 worker 真正开始执行时创建。"""
+    if trigger not in {"manual", "scheduled"}:
+        raise ValueError(f"不支持的 Social Media task trigger: {trigger}")
+    dedupe_key = f"social_media:{trigger}"
     active = (
-        session.query(SocialMediaSyncRun)
-        .filter(SocialMediaSyncRun.status.in_(["pending", "running"]))
-        .order_by(SocialMediaSyncRun.created_at.desc())
+        session.query(TaskQueue)
+        .filter(TaskQueue.dedupe_key == dedupe_key)
+        .filter(TaskQueue.status.in_(["pending", "running"]))
+        .order_by(TaskQueue.created_at.desc())
         .first()
     )
     if active is not None:
         logger.info(
-            "social_media.sync.enqueue.reused run_id=%s trigger=%s status=%s",
+            "social_media.sync.task_reused task_id=%s trigger=%s status=%s",
             active.id,
             trigger,
             active.status,
         )
         return active
-    config = load_social_media_config()
-    run = SocialMediaSyncRun(
-        platform="youtube",
-        external_account_id=config.youtube_channel_id,
-        trigger=trigger,
-        status="pending",
-    )
-    session.add(run)
-    session.commit()
-    session.refresh(run)
-    tq.enqueue(
-        session,
-        "social_media_collect",
-        {"run_id": run.id},
-        resource_key="social_media:youtube",
-        max_attempts=SOCIAL_MEDIA_MAX_ATTEMPTS,
-    )
+
+    try:
+        task = tq.enqueue(
+            session,
+            "social_media_collect",
+            {"trigger": trigger},
+            priority=100 if trigger == "manual" else 0,
+            resource_key="social_media:youtube",
+            dedupe_key=dedupe_key,
+            max_attempts=1,
+        )
+    except IntegrityError:
+        # 并发请求由数据库唯一索引裁决；失败方返回获胜的 active task。
+        session.rollback()
+        task = (
+            session.query(TaskQueue)
+            .filter(TaskQueue.dedupe_key == dedupe_key)
+            .order_by(TaskQueue.created_at.desc())
+            .first()
+        )
+        if task is None:
+            raise RuntimeError(f"并发去重冲突后未找到获胜 task: {dedupe_key}")
+        logger.info(
+            "social_media.sync.task_reused_after_conflict task_id=%s trigger=%s status=%s",
+            task.id,
+            trigger,
+            task.status,
+        )
+        return task
     logger.info(
-        "social_media.sync.enqueued run_id=%s trigger=%s channel_id=%s max_attempts=%s",
-        run.id,
+        "social_media.sync.task_enqueued task_id=%s trigger=%s priority=%s",
+        task.id,
         trigger,
-        config.youtube_channel_id,
-        SOCIAL_MEDIA_MAX_ATTEMPTS,
+        task.priority,
     )
+    return task
+
+
+def start_social_media_run(
+    session: Session,
+    trigger: str,
+    run_id: str | None = None,
+) -> SocialMediaSyncRun:
+    """在调用方 transaction 内创建 running run；兼容引用旧 run_id 的历史 task。"""
+    if run_id:
+        legacy_run = session.get(SocialMediaSyncRun, run_id)
+        if legacy_run is not None and legacy_run.status in {"done", "failed"}:
+            run = SocialMediaSyncRun(
+                platform="youtube",
+                trigger=(
+                    legacy_run.trigger
+                    if legacy_run.trigger in {"manual", "scheduled"}
+                    else trigger
+                ),
+                status="running",
+            )
+            session.add(run)
+            session.flush()
+            logger.warning(
+                "social_media.sync.legacy_terminal_run_replaced old_run_id=%s "
+                "new_run_id=%s old_status=%s",
+                run_id,
+                run.id,
+                legacy_run.status,
+            )
+        else:
+            run = _get_or_recover_sync_run(session, run_id, phase="start")
+    else:
+        run = SocialMediaSyncRun(
+            platform="youtube",
+            trigger=trigger,
+            status="running",
+        )
+        session.add(run)
+        session.flush()
+    run.status = "running"
+    run.started_at = datetime.utcnow()
+    run.finished_at = None
+    run.error = None
     return run
 
 
-def maybe_enqueue_due_social_media_run(
+def maybe_enqueue_due_social_media_task(
     session: Session,
     now: datetime | None = None,
-) -> SocialMediaSyncRun | None:
+) -> TaskQueue | None:
     now = now or datetime.utcnow()
     config = load_social_media_config()
     if not config.schedule_enabled or config.update_frequency == "manual" or not config.youtube_connected:
@@ -80,31 +167,13 @@ def maybe_enqueue_due_social_media_run(
         return None
     if next_run > now:
         return None
-    active_task = (
-        session.query(TaskQueue)
-        .filter(TaskQueue.task_type == "social_media_collect")
-        .filter(TaskQueue.status.in_(["pending", "running"]))
-        .first()
-    )
-    active_run = (
-        session.query(SocialMediaSyncRun)
-        .filter(SocialMediaSyncRun.status.in_(["pending", "running"]))
-        .first()
-    )
-    if active_task or active_run:
-        logger.info(
-            "social_media.schedule.due_but_active task_id=%s run_id=%s",
-            active_task.id if active_task else None,
-            active_run.id if active_run else None,
-        )
-        return None
     update_social_media_config(
         next_run_at=utc_isoformat(
             calculate_next_run_at(config.update_frequency, config.schedule_time, config.timezone, now)
         )
     )
     logger.info("social_media.schedule.due enqueue_at=%s", utc_isoformat(now))
-    return enqueue_social_media_run(session, "scheduled")
+    return enqueue_social_media_task(session, "scheduled")
 
 
 def calculate_next_run_at(
@@ -125,15 +194,6 @@ def calculate_next_run_at(
 
 async def collect_social_media(run_id: str) -> dict[str, int | str]:
     logger.info("social_media.sync.start run_id=%s", run_id)
-    with SessionLocal() as session:
-        run = session.get(SocialMediaSyncRun, run_id)
-        if run is None:
-            raise ValueError("Social Media sync run 不存在")
-        run.status = "running"
-        run.started_at = datetime.utcnow()
-        run.error = None
-        session.commit()
-
     config = load_social_media_config()
     dataset = await fetch_daily_dataset(config)
     collected_at = datetime.utcnow()
@@ -200,9 +260,7 @@ async def collect_social_media(run_id: str) -> dict[str, int | str]:
                 )
             )
 
-        run = session.get(SocialMediaSyncRun, run_id)
-        if run is None:
-            raise ValueError("Social Media sync run 不存在")
+        run = _get_or_recover_sync_run(session, run_id, phase="publish")
         run.external_account_id = dataset.channel_id
         run.metric_date = dataset.metric_date
         run.video_count = len(dataset.videos)
@@ -219,23 +277,10 @@ async def collect_social_media(run_id: str) -> dict[str, int | str]:
             len(dataset.videos),
         )
 
-    current = load_social_media_config()
     update_social_media_config(
         youtube_channel_id=dataset.channel_id,
         youtube_channel_title=dataset.channel_title,
         last_run_at=utc_isoformat(collected_at),
-        next_run_at=(
-            utc_isoformat(
-                calculate_next_run_at(
-                    current.update_frequency,
-                    current.schedule_time,
-                    current.timezone,
-                    collected_at,
-                )
-            )
-            if current.schedule_enabled and current.update_frequency != "manual"
-            else None
-        ),
     )
     logger.info(
         "social_media.sync.done run_id=%s metric_date=%s videos=%s collected_at=%s",

@@ -23,14 +23,20 @@ export interface SocialMediaListResponse {
 
 export interface SocialMediaRun {
   id: string
-  trigger: 'manual' | 'scheduled'
-  status: 'pending' | 'running' | 'done' | 'failed'
+  trigger: 'manual' | 'scheduled' | 'recovered'
+  status: 'running' | 'done' | 'failed'
   metric_date: string | null
   video_count: number
   error: string | null
   started_at: string | null
   finished_at: string | null
   created_at: string
+}
+
+export interface SocialMediaSyncRequest {
+  task_id: string
+  trigger: 'manual'
+  status: 'queued'
 }
 
 export interface SocialMediaSettings {

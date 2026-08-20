@@ -8,7 +8,19 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -75,6 +87,22 @@ class TaskQueue(Base):
     """本地任务队列，替代 Redis/ARQ。"""
 
     __tablename__ = "task_queue"
+    __table_args__ = (
+        Index(
+            "uq_task_queue_active_dedupe",
+            "dedupe_key",
+            unique=True,
+            sqlite_where=text("dedupe_key IS NOT NULL AND status IN ('pending', 'running')"),
+            postgresql_where=text("dedupe_key IS NOT NULL AND status IN ('pending', 'running')"),
+        ),
+        Index(
+            "uq_task_queue_running_resource",
+            "resource_key",
+            unique=True,
+            sqlite_where=text("resource_key IS NOT NULL AND status = 'running'"),
+            postgresql_where=text("resource_key IS NOT NULL AND status = 'running'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     task_type: Mapped[str] = mapped_column(String, nullable=False)  # embed|link_discover|recluster
@@ -88,6 +116,7 @@ class TaskQueue(Base):
     locked_at: Mapped[datetime | None] = mapped_column(DateTime)
     lease_until: Mapped[datetime | None] = mapped_column(DateTime)
     resource_key: Mapped[str | None] = mapped_column(String)
+    dedupe_key: Mapped[str | None] = mapped_column(String)
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
@@ -216,15 +245,21 @@ class SocialMediaVideoSnapshot(Base):
 
 
 class SocialMediaSyncRun(Base):
-    """采集运行日志；不会作为 List 的数据来源。"""
+    """真实采集执行记录；只使用 running、done、failed。"""
 
     __tablename__ = "social_media_sync_run"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'done', 'failed')",
+            name="ck_social_media_sync_run_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     platform: Mapped[str] = mapped_column(String, default="youtube", nullable=False)
     external_account_id: Mapped[str | None] = mapped_column(String)
     trigger: Mapped[str] = mapped_column(String, default="manual", nullable=False)
-    status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    status: Mapped[str] = mapped_column(String, default="running", nullable=False)
     metric_date: Mapped[str | None] = mapped_column(String)
     video_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error: Mapped[str | None] = mapped_column(Text)

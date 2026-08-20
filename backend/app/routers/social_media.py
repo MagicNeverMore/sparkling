@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -16,7 +16,7 @@ from ..logger import get_logger
 from ..models import SocialMediaDataset, SocialMediaSyncRun, SocialMediaVideoSnapshot
 from ..services.social_media.collector import (
     calculate_next_run_at,
-    enqueue_social_media_run,
+    enqueue_social_media_task,
 )
 from ..services.social_media.config import (
     disconnect_youtube,
@@ -93,14 +93,20 @@ class OAuthUrlOut(BaseModel):
 
 class SocialMediaRunOut(BaseModel):
     id: str
-    trigger: str
-    status: str
+    trigger: Literal["manual", "scheduled", "recovered"]
+    status: Literal["running", "done", "failed"]
     metric_date: Optional[str]
     video_count: int
     error: Optional[str]
     started_at: Optional[str]
     finished_at: Optional[str]
     created_at: str
+
+
+class SocialMediaSyncRequestOut(BaseModel):
+    task_id: str
+    trigger: Literal["manual"]
+    status: Literal["queued"]
 
 
 class SocialMediaVideoOut(BaseModel):
@@ -344,19 +350,19 @@ def disconnect_youtube_account() -> SocialMediaSettingsOut:
     return _settings_out()
 
 
-@router.post("/sync", response_model=SocialMediaRunOut, status_code=202)
-def run_social_media_sync(session: Session = Depends(get_session)) -> SocialMediaRunOut:
+@router.post("/sync", response_model=SocialMediaSyncRequestOut, status_code=202)
+def run_social_media_sync(session: Session = Depends(get_session)) -> SocialMediaSyncRequestOut:
     config = load_social_media_config()
     if not config.youtube_connected:
         raise HTTPException(status_code=400, detail="请先在 Social Media Settings 连接 YouTube")
-    run = enqueue_social_media_run(session, "manual")
+    task = enqueue_social_media_task(session, "manual")
     logger.info(
-        "social_media.sync.manual_requested run_id=%s status=%s channel_id=%s",
-        run.id,
-        run.status,
+        "social_media.sync.manual_requested task_id=%s task_status=%s channel_id=%s",
+        task.id,
+        task.status,
         config.youtube_channel_id,
     )
-    return _run_out(run)
+    return SocialMediaSyncRequestOut(task_id=task.id, trigger="manual", status="queued")
 
 
 @router.get("/runs/latest", response_model=Optional[SocialMediaRunOut])

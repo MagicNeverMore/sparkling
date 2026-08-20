@@ -26,7 +26,11 @@ from ..services.settings.settings_snapshot import (
     snapshot_link_settings,
 )
 from ..services.trend.collector import collect_trends, maybe_enqueue_due_trend_run
-from ..services.social_media.collector import collect_social_media, maybe_enqueue_due_social_media_run
+from ..services.social_media.collector import (
+    collect_social_media,
+    maybe_enqueue_due_social_media_task,
+    start_social_media_run,
+)
 from ..services.social_media.youtube import YouTubeReportsNotReadyError
 from ..services.trend.cleanup import purge_expired_deleted_trends, soft_delete_stale_unfavorited_trends
 from ..services.ws_manager import manager
@@ -115,11 +119,15 @@ async def _handle_trend_collect(payload: dict) -> None:
     )
 
 
-async def _handle_social_media_collect(payload: dict) -> None:
+async def _handle_social_media_collect(payload: dict, task_id: str) -> None:
     """处理 Social Media 日级采集并原子发布完整数据集。"""
-    run_id = payload.get("run_id")
-    if not run_id:
-        raise ValueError("social_media_collect 任务缺少 run_id")
+    legacy_run_id = payload.get("run_id")
+    trigger = payload.get("trigger")
+    if trigger not in {"manual", "scheduled"}:
+        if not legacy_run_id:
+            raise ValueError("social_media_collect 任务缺少有效 trigger")
+        trigger = "recovered"
+    run_id = _start_and_bind_social_media_run(task_id, payload, trigger, legacy_run_id)
     result = await collect_social_media(run_id)
     logger.info(
         "social_media_collect 完成，run_id=%s metric_date=%s videos=%s",
@@ -204,8 +212,6 @@ def _mark_task_done(task_id: str) -> None:
 def _mark_task_failed(
     task: _ClaimedTask,
     exc: Exception,
-    *,
-    retry_delay_seconds: int | None = None,
 ) -> None:
     with SessionLocal() as session:
         if task.task_type == "embed" and task.payload.get("atom_id"):
@@ -214,17 +220,20 @@ def _mark_task_failed(
             session,
             task.id,
             str(exc),
-            retry_delay_seconds=retry_delay_seconds,
+            max_attempts=1 if task.task_type == "social_media_collect" else None,
         )
         _sync_trend_run_after_task_failure(session, task, str(exc), status)
-        _sync_social_media_run_after_task_failure(session, task, str(exc), status)
+        _sync_social_media_run_after_task_failure(session, task, str(exc))
 
 
 def _mark_task_released(task: _ClaimedTask, reason: str) -> None:
     with SessionLocal() as session:
-        tq.release_running(session, task.id, reason)
-        _sync_trend_run_after_task_failure(session, task, reason, "pending")
-        _sync_social_media_run_after_task_failure(session, task, reason, "pending")
+        if task.task_type == "social_media_collect":
+            tq.mark_failed(session, task.id, reason, max_attempts=1)
+            _sync_social_media_run_after_task_failure(session, task, reason)
+        else:
+            tq.release_running(session, task.id, reason)
+            _sync_trend_run_after_task_failure(session, task, reason, "pending")
 
 
 def _sync_trend_run_after_task_failure(
@@ -256,25 +265,50 @@ def _sync_social_media_run_after_task_failure(
     session,  # noqa: ANN001
     task: _ClaimedTask,
     error: str,
-    task_status: str | None,
 ) -> None:
     if task.task_type != "social_media_collect":
         return
     run_id = task.payload.get("run_id")
     if not run_id:
         return
+    _fail_social_media_run(session, run_id, error)
+
+
+def _fail_social_media_run(session, run_id: str, error: str) -> None:  # noqa: ANN001
     run = session.get(SocialMediaSyncRun, run_id)
-    if run is None:
+    if run is None or run.status != "running":
         return
     now = datetime.utcnow()
-    if task_status == "failed":
-        run.status = "failed"
-        run.finished_at = now
-    else:
-        run.status = "pending"
+    run.status = "failed"
+    run.finished_at = now
     run.error = error[:2000]
     run.updated_at = now
     session.commit()
+
+
+def _start_and_bind_social_media_run(
+    task_id: str,
+    payload: dict,
+    trigger: str,
+    legacy_run_id: str | None,
+) -> str:
+    """原子创建 run 并持久化 task→run 关联，不暴露无绑定的 running run。"""
+    with SessionLocal() as session:
+        task = session.get(TaskQueue, task_id)
+        if task is None:
+            raise ValueError(f"social_media_collect task 不存在: {task_id}")
+        run = start_social_media_run(session, trigger, legacy_run_id)
+        payload["run_id"] = run.id
+        task.payload = json.dumps(payload, ensure_ascii=False)
+        task.updated_at = datetime.utcnow()
+        session.commit()
+        logger.info(
+            "social_media.sync.run_started task_id=%s run_id=%s trigger=%s",
+            task_id,
+            run.id,
+            run.trigger,
+        )
+        return run.id
 
 
 async def _execute_claimed_task(task: _ClaimedTask) -> bool:
@@ -297,7 +331,7 @@ async def _execute_claimed_task(task: _ClaimedTask) -> bool:
     elif task.task_type == "trend_collect":
         await _handle_trend_collect(task.payload)
     elif task.task_type == "social_media_collect":
-        await _handle_social_media_collect(task.payload)
+        await _handle_social_media_collect(task.payload, task.id)
     return True
 
 
@@ -318,14 +352,13 @@ async def _run_claimed_task(task: _ClaimedTask) -> None:
         raise
     except YouTubeReportsNotReadyError as exc:
         logger.warning(
-            "social_media_collect 等待 YouTube 日报 task_id=%s retry_after_seconds=%s "
+            "social_media_collect 本次同步失败：YouTube 日报尚未就绪 task_id=%s "
             "activity_reports=%s reach_reports=%s",
             task.id,
-            exc.retry_after_seconds,
             exc.basic_count,
             exc.reach_count,
         )
-        _mark_task_failed(task, exc, retry_delay_seconds=exc.retry_after_seconds)
+        _mark_task_failed(task, exc)
     except Exception as exc:
         logger.exception("任务 %s 执行失败: %s", task.id, exc)
         _mark_task_failed(task, exc)
@@ -372,7 +405,33 @@ def _blocked_task_types(active_counts: dict[str, int]) -> set[str]:
 
 def _reclaim_expired_task_leases() -> int:
     with SessionLocal() as session:
-        return tq.reclaim_expired_leases(session)
+        now = datetime.utcnow()
+        expired_social_tasks = (
+            session.query(TaskQueue)
+            .filter(TaskQueue.task_type == "social_media_collect")
+            .filter(TaskQueue.status == "running")
+            .filter(TaskQueue.lease_until.is_not(None))
+            .filter(TaskQueue.lease_until <= now)
+            .all()
+        )
+        bindings: list[tuple[str, str]] = []
+        for task in expired_social_tasks:
+            try:
+                payload = json.loads(task.payload or "{}")
+            except json.JSONDecodeError:
+                continue
+            run_id = payload.get("run_id")
+            if run_id:
+                bindings.append((run_id, task.id))
+
+        reclaimed = tq.reclaim_expired_leases(session, now)
+        for run_id, task_id in bindings:
+            _fail_social_media_run(
+                session,
+                run_id,
+                f"任务租约超时，执行进程可能已退出 task_id={task_id}",
+            )
+        return reclaimed
 
 
 async def _start_available_tasks(
@@ -457,9 +516,9 @@ async def _worker_loop() -> None:
                 or now - last_social_media_schedule_check_at >= SOCIAL_MEDIA_SCHEDULER_INTERVAL
             ):
                 with SessionLocal() as session:
-                    run = maybe_enqueue_due_social_media_run(session, now)
-                    if run is not None:
-                        logger.info("Social Media 定时任务已入队，run_id=%s", run.id)
+                    task = maybe_enqueue_due_social_media_task(session, now)
+                    if task is not None:
+                        logger.info("Social Media 定时任务已入队，task_id=%s", task.id)
                 last_social_media_schedule_check_at = now
 
             started = await _start_available_tasks(

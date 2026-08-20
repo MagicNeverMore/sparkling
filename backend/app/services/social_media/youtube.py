@@ -27,15 +27,12 @@ SCOPES = (
 BASIC_REPORT_TYPE = "channel_basic_a3"
 REACH_REPORT_TYPE = "channel_reach_basic_a1"
 REQUEST_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
-REPORTS_NOT_READY_RETRY_SECONDS = 60 * 60
 
 logger = get_logger(__name__)
 
 
 class YouTubeReportsNotReadyError(RuntimeError):
     """Reporting job 已建立，但 Google 尚未生成可配对的完整日报。"""
-
-    retry_after_seconds = REPORTS_NOT_READY_RETRY_SECONDS
 
     def __init__(
         self,
@@ -51,7 +48,8 @@ class YouTubeReportsNotReadyError(RuntimeError):
         self.reach_dates = reach_dates
         super().__init__(
             "YouTube 日报尚未生成完整的 activity + reach 数据；"
-            f"activity_reports={basic_count} reach_reports={reach_count}，将在稍后自动重试"
+            f"activity_reports={basic_count} reach_reports={reach_count}。"
+            "本次同步已结束；自动计划会在下个周期重新执行，手动同步可稍后再次触发"
         )
 
 
