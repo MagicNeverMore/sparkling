@@ -220,6 +220,22 @@ def _ensure_control_db() -> None:
         now = datetime.utcnow().isoformat(timespec="seconds")
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS deployment_config (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              public_origin TEXT,
+              updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO deployment_config (id, public_origin, updated_at)
+            VALUES (1, NULL, ?)
+            """,
+            (now,),
+        )
+        conn.execute(
+            """
             INSERT OR IGNORE INTO social_media_config (
               id, schedule_enabled, update_frequency, schedule_time, timezone, created_at, updated_at
             ) VALUES (1, 1, 'hourly', '09:00', 'UTC', ?, ?)

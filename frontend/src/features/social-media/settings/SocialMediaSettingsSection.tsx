@@ -5,6 +5,7 @@ import { api } from '../../../lib/api'
 import { useI18n } from '../../../lib/I18nProvider'
 import { useToast } from '../../../components/useToast'
 import type { SocialMediaSettings } from '../types'
+import type { DeploymentSettings } from '../../settings/deployment/types'
 
 interface OAuthUrlResponse {
   authorization_url: string
@@ -16,6 +17,7 @@ export default function SocialMediaSettingsSection() {
   const [searchParams] = useSearchParams()
   const oauthResult = searchParams.get('youtube')
   const [settings, setSettings] = useState<SocialMediaSettings | null>(null)
+  const [deployment, setDeployment] = useState<DeploymentSettings | null>(null)
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [secretDirty, setSecretDirty] = useState(false)
@@ -36,6 +38,11 @@ export default function SocialMediaSettingsSection() {
   }, [apply, show])
 
   useEffect(load, [load])
+  useEffect(() => {
+    void api.get<DeploymentSettings>('/api/settings/deployment').then(setDeployment).catch((error) => {
+      show(error instanceof Error ? error.message : String(error), 'error')
+    })
+  }, [show])
   useEffect(() => {
     if (oauthResult === 'connected') show(t('socialMedia.oauthConnected'), 'success')
     if (oauthResult === 'error') show(t('socialMedia.oauthFailed'), 'error')
@@ -114,8 +121,9 @@ export default function SocialMediaSettingsSection() {
         <p className="mt-3 text-xs text-slate-500">{t('socialMedia.hourlyDailyHint')}</p>
         <label className="mt-4 block text-sm text-slate-500">
           {t('socialMedia.redirectUri')}
-          <input readOnly value={`${window.location.origin}/api/social-media/youtube/oauth/callback`} className="mt-2 w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300" />
+          <input readOnly value={deployment?.youtube_callback_uri ?? ''} placeholder={t('settings.publicUrlRequired')} className="mt-2 w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300" />
         </label>
+        {!deployment?.youtube_callback_uri && <Link to="/settings?section=deployment" className="mt-2 inline-block text-sm text-amber-600 hover:text-amber-500 dark:text-amber-300">{t('settings.configurePublicUrl')}</Link>}
         <div className="mt-4 grid gap-2 text-xs text-slate-500 md:grid-cols-2">
           <span>{t('socialMedia.lastRun')}: {localDateTime(settings.last_run_at)}</span>
           <span>{t('socialMedia.nextRun')}: {localDateTime(settings.next_run_at)}</span>
@@ -153,7 +161,7 @@ export default function SocialMediaSettingsSection() {
           {settings.youtube_connected ? (
             <button type="button" onClick={() => void disconnect()} className="flex items-center gap-2 rounded-md border border-rose-300 px-4 py-2 text-sm text-rose-600 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-300 dark:hover:bg-rose-950"><Unlink size={16} />{t('socialMedia.disconnect')}</button>
           ) : (
-            <button type="button" onClick={() => void connect()} className="flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"><Link2 size={16} />{t('socialMedia.connectYouTube')}</button>
+            <button type="button" onClick={() => void connect()} disabled={!deployment?.youtube_callback_uri} title={!deployment?.youtube_callback_uri ? t('settings.publicUrlRequired') : undefined} className="flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-slate-400"><Link2 size={16} />{t('socialMedia.connectYouTube')}</button>
           )}
         </div>
       </section>

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentType } from 'react'
-import { Brain, Database, Eye, EyeOff, Info, Share2, TrendingUp } from 'lucide-react'
+import { Brain, Database, Eye, EyeOff, Globe2, Info, Share2, TrendingUp } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../../components/useToast'
 import { api, ApiError } from '../../lib/api'
@@ -8,11 +8,14 @@ import { useI18n } from '../../lib/I18nProvider'
 import TrendSettingsSection from '../trend/TrendSettingsSection'
 import type { TrendSettingsRaw } from '../trend/types'
 import SocialMediaSettingsSection from '../social-media/settings/SocialMediaSettingsSection'
+import DeploymentSettingsSection from './deployment/DeploymentSettingsSection'
 
 const dims = [384, 512, 768, 1024, 1536, 2048, 2560, 3072, 4096]
 
 type DatabaseBackend = 'sqlite' | 'postgresql'
-type SettingsSection = 'database' | 'ai' | 'trend' | 'social-media'
+type SettingsSection = 'database' | 'deployment' | 'ai' | 'trend' | 'social-media'
+
+const settingsSections: SettingsSection[] = ['database', 'deployment', 'ai', 'trend', 'social-media']
 
 interface DatabaseSettingsRaw {
   db_backend: DatabaseBackend
@@ -63,7 +66,10 @@ export default function Settings() {
   const { t } = useI18n()
   const { show } = useToast()
   const [searchParams] = useSearchParams()
-  const [activeSection, setActiveSection] = useState<SettingsSection>(() => searchParams.get('section') === 'social-media' ? 'social-media' : 'database')
+  const [activeSection, setActiveSection] = useState<SettingsSection>(() => {
+    const requested = searchParams.get('section') as SettingsSection | null
+    return requested && settingsSections.includes(requested) ? requested : 'database'
+  })
 
   const [embedBaseUrl, setEmbedBaseUrl] = useState('https://api.openai.com/v1')
   const [embedApiKey, setEmbedApiKey] = useState('')
@@ -112,6 +118,7 @@ export default function Settings() {
 
   const navItems: SettingsNavItem[] = [
     { id: 'database', label: t('settings.database'), Icon: Database },
+    { id: 'deployment', label: t('settings.deployment'), Icon: Globe2 },
     { id: 'ai', label: t('settings.aiProvider'), Icon: Brain },
     { id: 'trend', label: t('settings.trend'), Icon: TrendingUp },
     { id: 'social-media', label: t('socialMedia.settingsTitle'), Icon: Share2 },
@@ -436,6 +443,7 @@ export default function Settings() {
       </aside>
 
       <div className="min-w-0 space-y-6">
+        {activeSection === 'deployment' && <DeploymentSettingsSection />}
         {activeSection === 'database' && (
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
             <h1 className="text-lg font-semibold text-slate-950 dark:text-slate-100">{t('settings.database')}</h1>

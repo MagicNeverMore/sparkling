@@ -24,4 +24,6 @@ echo "[entrypoint] 启动 Sparkling 服务..."
 exec uv run uvicorn app.main:app \
     --host "${SPARKLING_HOST:-0.0.0.0}" \
     --port "${SPARKLING_PORT:-3721}" \
+    --proxy-headers \
+    --forwarded-allow-ips "${FORWARDED_ALLOW_IPS:-127.0.0.1}" \
     --no-server-header

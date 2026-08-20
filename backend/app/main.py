@@ -91,7 +91,7 @@ async def require_auth_for_api(request: Request, call_next):  # noqa: ANN001
 # 开发期允许前端 dev server 跨域访问
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[config.dev_origin],
+    allow_origins=[config.dev_origin] if config.dev_origin else [],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
