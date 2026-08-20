@@ -10,7 +10,7 @@ config = context.config
 # 覆盖 alembic.ini 中的占位 URL
 config.set_main_option("sqlalchemy.url", get_sqlalchemy_url())
 
-if config.config_file_name is not None:
+if config.config_file_name is not None and not config.attributes.get("preserve_app_logging", False):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
