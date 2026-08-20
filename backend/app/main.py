@@ -13,7 +13,7 @@ from .config import config
 from .db import DatabaseConnectionError, configure_current_database, get_database_backend, get_engine, uses_postgresql
 from .logger import get_logger, setup_logging
 from .migrations import run_migrations_for_engine
-from .routers import atoms, auth, graph, links, search, settings, social_media, tasks, trends, ws
+from .routers import atoms, auth, graph, links, logs, search, settings, social_media, tasks, trends, ws
 from .runtime import start_background_worker, stop_background_worker
 from .services import auth as auth_service
 
@@ -47,6 +47,8 @@ AUTH_EXEMPT_API_PATHS = {
     "/api/auth/register",
     "/api/auth/login",
     "/api/health",
+    # OAuth state 已提供一次性请求校验；callback 不能依赖跨站返回时的 session cookie。
+    "/api/social-media/youtube/oauth/callback",
 }
 
 
@@ -99,6 +101,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
+app.include_router(logs.router, prefix="/api/settings/logs", tags=["settings"])
 app.include_router(atoms.router, prefix="/api/atoms", tags=["atoms"])
 app.include_router(links.router, prefix="/api/links", tags=["links"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
@@ -116,6 +119,31 @@ def health() -> dict[str, str]:
 
 # —— 挂载静态前端（SPA fallback）——
 _frontend_dir = Path(__file__).parent / "frontend"
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+    "X-Content-Type-Options": "nosniff",
+}
+_IMMUTABLE_ASSET_HEADERS = {
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "X-Content-Type-Options": "nosniff",
+}
+_STATIC_FILES_WITHOUT_FALLBACK = {
+    "manifest.webmanifest",
+    "registerSW.js",
+    "sw.js",
+}
+
+
+def _safe_frontend_file(full_path: str) -> Path | None:
+    root = _frontend_dir.resolve()
+    candidate = (root / (full_path or "index.html")).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
@@ -125,10 +153,13 @@ async def serve_frontend(full_path: str):
     if full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="Not found")
     # 尝试匹配具体文件，否则回退到 index.html
-    file_path = _frontend_dir / (full_path or "index.html")
-    if file_path.is_file():
-        return FileResponse(file_path)
+    file_path = _safe_frontend_file(full_path)
+    if file_path is not None:
+        headers = _IMMUTABLE_ASSET_HEADERS if full_path.startswith("assets/") else _NO_CACHE_HEADERS
+        return FileResponse(file_path, headers=headers)
+    if full_path.startswith("assets/") or full_path in _STATIC_FILES_WITHOUT_FALLBACK:
+        raise HTTPException(status_code=404, detail="Not found")
     index_path = _frontend_dir / "index.html"
     if index_path.is_file():
-        return FileResponse(index_path)
+        return FileResponse(index_path, headers=_NO_CACHE_HEADERS)
     raise HTTPException(status_code=404, detail="Frontend not built")

@@ -106,11 +106,19 @@ All optional, defaults suitable for local Docker deployment:
 | `SPARKLING_PORT` | `3721` | Server listen port |
 | `SPARKLING_DB_PATH` | `/data/sparkling.db` | Default SQLite file path used only when control DB has no database config yet |
 | `SPARKLING_CONTROL_DB_PATH` | `/data/control.db` | Fixed local SQLite file for database selection, auth user, and sessions |
+| `SPARKLING_LOG_DIR` | `/data/logs` | Unified rotated log directory persisted in the Docker volume and available under Settings → Logs |
+| `SPARKLING_LOG_MAX_FILE_MB` | `10` | Maximum size of each active or rotated log file |
+| `SPARKLING_LOG_BACKUP_COUNT` | `9` | Maximum backups retained for each of `sparkling.log` and `error.log` |
+| `SPARKLING_LOG_MAX_TOTAL_MB` | `200` | Hard cap used to prune the oldest managed log backups across the directory |
 | `SPARKLING_HOST` | `0.0.0.0` | Listen address (`0.0.0.0` required inside Docker) |
 | `SPARKLING_DEV_ORIGIN` | (empty) | CORS origin for frontend dev server |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Reverse-proxy IP/CIDR trusted by Uvicorn; set this to the OpenResty network for Docker deployments |
 
 After starting a production deployment, enter the browser-facing Public URL under **Settings → Network / Deployment**. It is stored in the fixed control SQLite database and takes effect immediately without a container restart. The page generates the exact YouTube OAuth redirect URI to copy into Google Console.
+
+Do not long-cache the SPA entry files at the reverse proxy. Configure OpenResty/Nginx to use `no-store` for `/index.html`, `/sw.js`, and `/registerSW.js`, while only `/assets/` receives a one-year immutable cache. Missing assets must return 404 instead of falling back to `index.html`.
+
+Application file logs are capped at 200 MB by default. Compose also rotates the Docker `json-file` stdout/stderr logs at 10 MB with 3 files, so container logs cannot grow without bound independently of `/data/logs`.
 
 Modify the corresponding `environment` fields in `docker-compose.yml`. Database backend selection is stored in the fixed control SQLite database. Switch between SQLite/PostgreSQL on the **Settings → Database** page; PostgreSQL URLs are saved there, not in `.env`.
 

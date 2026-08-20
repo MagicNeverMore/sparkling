@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentType } from 'react'
-import { Brain, Database, Eye, EyeOff, Globe2, Info, Share2, TrendingUp } from 'lucide-react'
+import { Brain, Database, Eye, EyeOff, Globe2, Info, ScrollText, Share2, TrendingUp } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../../components/useToast'
 import { api, ApiError } from '../../lib/api'
@@ -9,13 +9,14 @@ import TrendSettingsSection from '../trend/TrendSettingsSection'
 import type { TrendSettingsRaw } from '../trend/types'
 import SocialMediaSettingsSection from '../social-media/settings/SocialMediaSettingsSection'
 import DeploymentSettingsSection from './deployment/DeploymentSettingsSection'
+import LogsSettingsSection from './logs/LogsSettingsSection'
 
 const dims = [384, 512, 768, 1024, 1536, 2048, 2560, 3072, 4096]
 
 type DatabaseBackend = 'sqlite' | 'postgresql'
-type SettingsSection = 'database' | 'deployment' | 'ai' | 'trend' | 'social-media'
+type SettingsSection = 'database' | 'deployment' | 'logs' | 'ai' | 'trend' | 'social-media'
 
-const settingsSections: SettingsSection[] = ['database', 'deployment', 'ai', 'trend', 'social-media']
+const settingsSections: SettingsSection[] = ['database', 'deployment', 'logs', 'ai', 'trend', 'social-media']
 
 interface DatabaseSettingsRaw {
   db_backend: DatabaseBackend
@@ -119,6 +120,7 @@ export default function Settings() {
   const navItems: SettingsNavItem[] = [
     { id: 'database', label: t('settings.database'), Icon: Database },
     { id: 'deployment', label: t('settings.deployment'), Icon: Globe2 },
+    { id: 'logs', label: t('settings.logs'), Icon: ScrollText },
     { id: 'ai', label: t('settings.aiProvider'), Icon: Brain },
     { id: 'trend', label: t('settings.trend'), Icon: TrendingUp },
     { id: 'social-media', label: t('socialMedia.settingsTitle'), Icon: Share2 },
@@ -444,6 +446,7 @@ export default function Settings() {
 
       <div className="min-w-0 space-y-6">
         {activeSection === 'deployment' && <DeploymentSettingsSection />}
+        {activeSection === 'logs' && <LogsSettingsSection />}
         {activeSection === 'database' && (
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
             <h1 className="text-lg font-semibold text-slate-950 dark:text-slate-100">{t('settings.database')}</h1>
