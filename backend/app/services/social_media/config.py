@@ -4,7 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from ...logger import get_logger
 from ..settings.runtime_config import connect_control_db
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -43,7 +46,7 @@ def load_social_media_config() -> SocialMediaConfig:
         row = conn.execute(f"SELECT {_FIELDS} FROM social_media_config WHERE id = 1").fetchone()  # noqa: S608
     if row is None:
         raise RuntimeError("Social Media Settings 未初始化")
-    return SocialMediaConfig(
+    config = SocialMediaConfig(
         schedule_enabled=bool(row["schedule_enabled"]),
         update_frequency=row["update_frequency"],
         schedule_time=row["schedule_time"],
@@ -60,6 +63,15 @@ def load_social_media_config() -> SocialMediaConfig:
         last_run_at=row["last_run_at"],
         next_run_at=row["next_run_at"],
     )
+    logger.debug(
+        "social_media.config.loaded youtube_connected=%s refresh_credential_present=%s "
+        "has_channel_id=%s channel_id=%s",
+        config.youtube_connected,
+        bool(config.youtube_refresh_token),
+        bool(config.youtube_channel_id),
+        config.youtube_channel_id,
+    )
+    return config
 
 
 def update_social_media_config(**fields: object) -> SocialMediaConfig:
@@ -92,12 +104,29 @@ def update_social_media_config(**fields: object) -> SocialMediaConfig:
     normalized["updated_at"] = datetime.utcnow().isoformat(timespec="seconds")
     assignments = ", ".join(f"{key} = ?" for key in normalized)
     with connect_control_db() as conn:
-        conn.execute(
+        cursor = conn.execute(
             f"UPDATE social_media_config SET {assignments} WHERE id = 1",  # noqa: S608
             tuple(normalized.values()),
         )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            logger.error(
+                "social_media.config.update_failed reason=row_not_found fields=%s",
+                sorted(fields),
+            )
+            raise RuntimeError("Social Media Settings 持久化失败：配置记录不存在")
         conn.commit()
-    return load_social_media_config()
+    saved = load_social_media_config()
+    logger.info(
+        "social_media.config.updated fields=%s youtube_connected=%s "
+        "refresh_credential_present=%s has_channel_id=%s channel_id=%s",
+        sorted(fields),
+        saved.youtube_connected,
+        bool(saved.youtube_refresh_token),
+        bool(saved.youtube_channel_id),
+        saved.youtube_channel_id,
+    )
+    return saved
 
 
 def disconnect_youtube() -> SocialMediaConfig:

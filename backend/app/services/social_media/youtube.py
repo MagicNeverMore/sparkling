@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import re
 import secrets
@@ -54,6 +55,13 @@ class YouTubeReportsNotReadyError(RuntimeError):
         )
 
 
+def oauth_trace_id(state: str | None) -> str:
+    """用不可逆短摘要关联 OAuth 日志，不记录原始 state。"""
+    if not state:
+        return "missing"
+    return hashlib.sha256(state.encode("utf-8")).hexdigest()[:12]
+
+
 @dataclass(frozen=True)
 class YouTubeVideo:
     video_id: str
@@ -87,7 +95,8 @@ def build_oauth_url(config: SocialMediaConfig, redirect_uri: str) -> str:
     state = secrets.token_urlsafe(32)
     update_social_media_config(oauth_state=state, oauth_redirect_uri=redirect_uri)
     logger.info(
-        "youtube.oauth.start redirect_uri=%s scopes=%s",
+        "youtube.oauth.start trace_id=%s redirect_uri=%s scopes=%s",
+        oauth_trace_id(state),
         redirect_uri,
         len(SCOPES),
     )
@@ -107,8 +116,20 @@ def build_oauth_url(config: SocialMediaConfig, redirect_uri: str) -> str:
 
 
 async def exchange_oauth_code(config: SocialMediaConfig, code: str, state: str) -> tuple[str, str, str]:
-    logger.info("youtube.oauth.exchange.start redirect_uri=%s", config.oauth_redirect_uri)
-    if not config.oauth_state or not secrets.compare_digest(config.oauth_state, state):
+    trace_id = oauth_trace_id(state)
+    state_matches = bool(
+        config.oauth_state and secrets.compare_digest(config.oauth_state, state)
+    )
+    logger.info(
+        "youtube.oauth.exchange.start trace_id=%s stored_trace_id=%s state_match=%s "
+        "redirect_uri=%s client_configured=%s",
+        trace_id,
+        oauth_trace_id(config.oauth_state),
+        state_matches,
+        config.oauth_redirect_uri,
+        bool(config.youtube_client_id and config.youtube_client_secret),
+    )
+    if not state_matches:
         raise ValueError("YouTube OAuth state 无效或已过期")
     if not config.youtube_client_id or not config.youtube_client_secret or not config.oauth_redirect_uri:
         raise ValueError("YouTube OAuth 配置不完整")
@@ -125,12 +146,27 @@ async def exchange_oauth_code(config: SocialMediaConfig, code: str, state: str) 
         )
         _raise_google_error(response)
         token = response.json()
-        refresh_token = token.get("refresh_token") or config.youtube_refresh_token
+        returned_refresh_token = token.get("refresh_token")
+        refresh_token = returned_refresh_token or config.youtube_refresh_token
         access_token = token.get("access_token")
+        logger.info(
+            "youtube.oauth.token.received trace_id=%s status=%s access_credential_present=%s "
+            "refresh_credential_present=%s refresh_credential_source=%s",
+            trace_id,
+            response.status_code,
+            bool(access_token),
+            bool(refresh_token),
+            "google" if returned_refresh_token else "stored",
+        )
         if not refresh_token or not access_token:
             raise ValueError("Google 未返回 offline refresh token，请重新授权")
         channel_id, channel_title, _uploads = await _fetch_channel(client, access_token)
-    logger.info("youtube.oauth.exchange.done channel_id=%s channel_title=%s", channel_id, channel_title)
+    logger.info(
+        "youtube.oauth.exchange.done trace_id=%s channel_id=%s channel_title=%s",
+        trace_id,
+        channel_id,
+        channel_title,
+    )
     return refresh_token, channel_id, channel_title
 
 

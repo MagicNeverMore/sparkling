@@ -1,6 +1,7 @@
 """Social Media Analysis：设置、YouTube OAuth、日级同步与最新完整 List。"""
 from __future__ import annotations
 
+import os
 from typing import Optional
 from urllib.parse import urlsplit
 
@@ -22,12 +23,18 @@ from ..services.social_media.config import (
     load_social_media_config,
     update_social_media_config,
 )
-from ..services.social_media.youtube import build_oauth_url, exchange_oauth_code
+from ..services.social_media.youtube import build_oauth_url, exchange_oauth_code, oauth_trace_id
 from ..services.settings.deployment_config import load_deployment_config
+from ..services.settings import runtime_config
 from ..time_utils import get_timezone, utc_isoformat
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+def _oauth_runtime_context() -> tuple[str, str]:
+    """用于判断 callback 与 status 是否落在同一容器和 control DB。"""
+    return os.getenv("HOSTNAME", "local"), str(runtime_config.CONTROL_DB_PATH)
 
 
 class SocialMediaSettingsUpdate(BaseModel):
@@ -147,6 +154,17 @@ def _oauth_frontend_origin(request: Request, redirect_uri: str | None) -> str:
 
 def _settings_out() -> SocialMediaSettingsOut:
     config = load_social_media_config()
+    instance_id, control_db = _oauth_runtime_context()
+    logger.info(
+        "social_media.connection.status_read youtube_connected=%s refresh_credential_present=%s "
+        "has_channel_id=%s channel_id=%s instance_id=%s control_db=%s",
+        config.youtube_connected,
+        bool(config.youtube_refresh_token),
+        bool(config.youtube_channel_id),
+        config.youtube_channel_id,
+        instance_id,
+        control_db,
+    )
     return SocialMediaSettingsOut(
         schedule_enabled=config.schedule_enabled,
         update_frequency=config.update_frequency,
@@ -212,10 +230,16 @@ def start_youtube_oauth(request: Request) -> OAuthUrlOut:
     config = load_social_media_config()
     try:
         redirect_uri = _youtube_oauth_redirect_uri(request)
+        instance_id, control_db = _oauth_runtime_context()
         logger.info(
-            "social_media.oauth.start redirect_uri=%s client_configured=%s",
+            "social_media.oauth.start redirect_uri=%s client_configured=%s request_host=%s "
+            "forwarded_host=%s instance_id=%s control_db=%s",
             redirect_uri,
             bool(config.youtube_client_id and config.youtube_client_secret),
+            request.headers.get("host"),
+            request.headers.get("x-forwarded-host"),
+            instance_id,
+            control_db,
         )
         return OAuthUrlOut(authorization_url=build_oauth_url(config, redirect_uri))
     except ValueError as exc:
@@ -230,17 +254,34 @@ async def youtube_oauth_callback(
     error: Optional[str] = Query(default=None),
 ):  # noqa: ANN201
     config = load_social_media_config()
+    trace_id = oauth_trace_id(state)
+    instance_id, control_db = _oauth_runtime_context()
     frontend_origin = _oauth_frontend_origin(request, config.oauth_redirect_uri)
     frontend = f"{frontend_origin}/settings?section=social-media"
     if error or not code or not state:
         logger.warning(
-            "social_media.oauth.callback.rejected google_error=%s has_code=%s has_state=%s",
+            "social_media.oauth.callback.rejected trace_id=%s google_error=%s has_code=%s "
+            "has_state=%s instance_id=%s control_db=%s",
+            trace_id,
             error,
             bool(code),
             bool(state),
+            instance_id,
+            control_db,
         )
         return RedirectResponse(f"{frontend}&youtube=error")
-    logger.info("social_media.oauth.callback.received redirect_uri=%s", config.oauth_redirect_uri)
+    logger.info(
+        "social_media.oauth.callback.received trace_id=%s stored_trace_id=%s state_match=%s "
+        "redirect_uri=%s request_host=%s forwarded_host=%s instance_id=%s control_db=%s",
+        trace_id,
+        oauth_trace_id(config.oauth_state),
+        bool(config.oauth_state and config.oauth_state == state),
+        config.oauth_redirect_uri,
+        request.headers.get("host"),
+        request.headers.get("x-forwarded-host"),
+        instance_id,
+        control_db,
+    )
     try:
         refresh_token, channel_id, channel_title = await exchange_oauth_code(config, code, state)
         next_run = (
@@ -250,7 +291,7 @@ async def youtube_oauth_callback(
             if config.schedule_enabled and config.update_frequency != "manual"
             else None
         )
-        update_social_media_config(
+        saved = update_social_media_config(
             youtube_refresh_token=refresh_token,
             youtube_channel_id=channel_id,
             youtube_channel_title=channel_title,
@@ -258,13 +299,39 @@ async def youtube_oauth_callback(
             oauth_redirect_uri=None,
             next_run_at=next_run,
         )
+        verified = load_social_media_config()
+        persistence_matches = bool(
+            saved.youtube_connected
+            and verified.youtube_connected
+            and saved.youtube_channel_id == channel_id
+            and verified.youtube_channel_id == channel_id
+        )
+        if not persistence_matches:
+            logger.error(
+                "social_media.oauth.callback.persistence_mismatch trace_id=%s "
+                "saved_connected=%s verified_connected=%s saved_channel_id=%s "
+                "verified_channel_id=%s expected_channel_id=%s instance_id=%s control_db=%s",
+                trace_id,
+                saved.youtube_connected,
+                verified.youtube_connected,
+                saved.youtube_channel_id,
+                verified.youtube_channel_id,
+                channel_id,
+                instance_id,
+                control_db,
+            )
+            raise RuntimeError("YouTube 连接信息写入后校验失败")
     except Exception as exc:
         logger.exception("YouTube OAuth callback 失败: %s", exc)
         return RedirectResponse(f"{frontend}&youtube=error")
     logger.info(
-        "social_media.oauth.callback.connected channel_id=%s channel_title=%s",
+        "social_media.oauth.callback.connected trace_id=%s channel_id=%s channel_title=%s "
+        "instance_id=%s control_db=%s",
+        trace_id,
         channel_id,
         channel_title,
+        instance_id,
+        control_db,
     )
     return RedirectResponse(f"{frontend}&youtube=connected")
 

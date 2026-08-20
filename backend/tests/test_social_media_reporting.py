@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI, Request
 
@@ -37,6 +38,120 @@ def _report(metric_date: str, create_time: str, report_id: str) -> dict[str, str
 
 
 class SocialMediaReportingTest(unittest.TestCase):
+    def test_callback_never_reports_connected_when_persistence_is_not_visible(self) -> None:
+        from app.routers import social_media
+        from app.services.social_media.config import SocialMediaConfig
+
+        disconnected = SocialMediaConfig(
+            schedule_enabled=True,
+            update_frequency="hourly",
+            schedule_time="09:00",
+            timezone="UTC",
+            youtube_client_id="client-id",
+            youtube_client_secret="client-secret",
+            youtube_refresh_token=None,
+            youtube_channel_id=None,
+            youtube_channel_title=None,
+            youtube_basic_job_id=None,
+            youtube_reach_job_id=None,
+            oauth_state="expected-state",
+            oauth_redirect_uri="https://public.example/api/social-media/youtube/oauth/callback",
+            last_run_at=None,
+            next_run_at=None,
+        )
+        request = Request(
+            {
+                "type": "http",
+                "scheme": "https",
+                "server": ("public.example", 443),
+                "client": ("203.0.113.5", 12345),
+                "headers": [(b"host", b"public.example")],
+            }
+        )
+
+        with (
+            patch.object(social_media, "load_social_media_config", return_value=disconnected),
+            patch.object(social_media, "update_social_media_config", return_value=disconnected),
+            patch.object(
+                social_media,
+                "exchange_oauth_code",
+                new=AsyncMock(return_value=("refresh-token", "UC123", "Example Channel")),
+            ),
+        ):
+            response = asyncio.run(
+                social_media.youtube_oauth_callback(
+                    request,
+                    code="authorization-code",
+                    state="expected-state",
+                    error=None,
+                )
+            )
+            status = social_media._settings_out()
+
+        self.assertFalse(status.youtube_connected)
+        self.assertIn("youtube=error", response.headers["location"])
+
+    def test_callback_persists_connection_before_reporting_connected_and_logs_trace(self) -> None:
+        from app.routers import social_media
+        from app.services.settings import runtime_config
+        from app.services.social_media.config import (
+            load_social_media_config,
+            update_social_media_config,
+        )
+
+        request = Request(
+            {
+                "type": "http",
+                "scheme": "https",
+                "server": ("public.example", 443),
+                "client": ("203.0.113.5", 12345),
+                "headers": [
+                    (b"host", b"public.example"),
+                    (b"x-forwarded-host", b"public.example"),
+                ],
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            control_db_path = Path(directory) / "control.db"
+            with patch.object(runtime_config, "CONTROL_DB_PATH", control_db_path):
+                load_social_media_config()
+                update_social_media_config(
+                    youtube_client_id="client-id",
+                    youtube_client_secret="client-secret",
+                    oauth_state="expected-state",
+                    oauth_redirect_uri=(
+                        "https://public.example/api/social-media/youtube/oauth/callback"
+                    ),
+                )
+                with (
+                    patch.object(
+                        social_media,
+                        "exchange_oauth_code",
+                        new=AsyncMock(
+                            return_value=("refresh-token", "UC123", "Example Channel")
+                        ),
+                    ),
+                    self.assertLogs("app.routers.social_media", level="INFO") as captured,
+                ):
+                    response = asyncio.run(
+                        social_media.youtube_oauth_callback(
+                            request,
+                            code="authorization-code",
+                            state="expected-state",
+                            error=None,
+                        )
+                    )
+                    status = social_media._settings_out()
+
+        messages = "\n".join(captured.output)
+        self.assertTrue(status.youtube_connected)
+        self.assertEqual(status.youtube_channel_id, "UC123")
+        self.assertIn("youtube=connected", response.headers["location"])
+        self.assertIn("social_media.oauth.callback.connected trace_id=", messages)
+        self.assertIn("social_media.connection.status_read youtube_connected=True", messages)
+        for secret in ("authorization-code", "expected-state", "refresh-token", "client-secret"):
+            self.assertNotIn(secret, messages)
+
     def test_deployment_public_origin_is_persisted_and_normalized(self) -> None:
         from app.services.settings.deployment_config import (
             load_deployment_config,
