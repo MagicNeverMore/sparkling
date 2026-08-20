@@ -13,11 +13,21 @@ services:
     environment:
       - SPARKLING_DB_PATH=/data/sparkling.db
       - SPARKLING_CONTROL_DB_PATH=/data/control.db
+      - SPARKLING_LOG_DIR=/data/logs
+      - SPARKLING_LOG_MAX_FILE_MB=10
+      - SPARKLING_LOG_BACKUP_COUNT=9
+      - SPARKLING_LOG_MAX_TOTAL_MB=200
       - SPARKLING_HOST=0.0.0.0
       - SPARKLING_PORT=3721
       - SPARKLING_DEV_ORIGIN=
       # 设置为 OpenResty 容器的 IP/CIDR，用于识别可信 Proxy Headers。
       - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
+    # 应用文件日志之外，Docker 自身也会保存 stdout/stderr，必须单独限制。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 volumes:

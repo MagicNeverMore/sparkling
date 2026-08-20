@@ -106,11 +106,18 @@ docker compose start
 | `SPARKLING_PORT` | `3721` | 服务监听端口 |
 | `SPARKLING_DB_PATH` | `/data/sparkling.db` | 默认 SQLite 文件路径，仅在 control DB 还没有数据库配置时使用 |
 | `SPARKLING_CONTROL_DB_PATH` | `/data/control.db` | 固定本地 SQLite 文件，用于保存数据库选择、认证用户和 session |
+| `SPARKLING_LOG_DIR` | `/data/logs` | 统一轮转日志目录，保存在 Docker volume 中；可在 Settings → Logs 查看 |
+| `SPARKLING_LOG_MAX_FILE_MB` | `10` | 单个 active 或轮转日志文件的最大容量 |
+| `SPARKLING_LOG_BACKUP_COUNT` | `9` | `sparkling.log` 和 `error.log` 各自最多保留的 backup 数量 |
+| `SPARKLING_LOG_MAX_TOTAL_MB` | `200` | 日志目录总容量上限，超过时从最旧的受管 backup 开始删除 |
 | `SPARKLING_HOST` | `0.0.0.0` | 监听地址（Docker 内需要 `0.0.0.0`） |
 | `SPARKLING_DEV_ORIGIN` | (空) | 前端 dev server 的 CORS origin |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Uvicorn 信任的反向代理 IP/CIDR；Docker 部署应设置为 OpenResty 所在网段 |
 
 生产环境启动后，在 **Settings → Network / Deployment** 填写浏览器实际访问的 Public URL。该配置保存在固定的 control SQLite 中并立即生效，不需要重启容器；页面会自动生成可复制到 Google Console 的 YouTube OAuth redirect URI。
+反向代理不要长期缓存 SPA 入口文件，否则旧 `index.html` 可能引用已经删除的 hash asset。OpenResty/Nginx 建议让 `/index.html`、`/sw.js`、`/registerSW.js` 使用 `no-store`，仅对 `/assets/` 使用一年期 immutable 缓存；缺失 asset 必须返回 404，不能回退到 `index.html`。
+
+应用文件日志默认最多占用 200 MB。Compose 还会将 Docker `json-file` 中的 stdout/stderr 按 10 MB、最多 3 个文件轮转，避免容器日志在 `/data/logs` 之外独立无限增长。
 
 在 `docker-compose.yml` 中修改对应 `environment` 字段。数据库后端选择保存在固定 control SQLite 中；请在页面 **Settings → 数据库** 中切换 SQLite/PostgreSQL，PostgreSQL URL 也保存在那里，不再写入 `.env`。
 
@@ -172,7 +179,7 @@ sparkling/
 │   │   ├── vector_store.py       # sqlite-vec 向量存储
 │   │   ├── migrations.py         # 自动迁移
 │   │   ├── runtime.py            # 后台 worker 生命周期
-│   │   ├── logger.py             # 统一日志（控制台 + 按日轮转文件）
+│   │   ├── logger.py             # 统一日志（控制台 + 容量受限的轮转文件）
 │   │   ├── routers/              # API 路由
 │   │   │   ├── atoms.py         # 想法 CRUD + WebSocket 广播
 │   │   │   ├── links.py         # 关联查询
