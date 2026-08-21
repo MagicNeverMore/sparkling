@@ -9,7 +9,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.routers import social_media
+from app.routers.social_media import analytics as social_media
 
 
 class OAuthCallbackAndFrontendCacheTest(unittest.IsolatedAsyncioTestCase):

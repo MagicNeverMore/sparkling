@@ -47,6 +47,8 @@ export interface TaskCreatePayload {
   category?: string
   startDate?: string
   dueDate?: string
+  topicId?: string
+  timezone?: string
 }
 
 interface TaskState {
@@ -80,6 +82,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       category: payload.category,
       start_date: payload.startDate,
       due_date: payload.dueDate,
+      topic_id: payload.topicId,
+      timezone: payload.timezone,
     })
     set((s) => ({ tasks: [fromRaw(raw), ...s.tasks] }))
   },

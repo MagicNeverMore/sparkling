@@ -19,6 +19,8 @@ _REQUIRED_COLUMNS: dict[str, set[str]] = {
     "task_queue": {"dedupe_key"},
     "social_media_video": {"external_video_id", "published_at"},
     "social_media_video_metric": {"video_id", "data_date", "updated_at"},
+    "content_topic": {"status", "task_id", "scheduled_at"},
+    "content_topic_publication": {"topic_id", "platform"},
 }
 
 

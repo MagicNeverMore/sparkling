@@ -8,6 +8,8 @@ import Settings from './features/settings/Settings'
 import Tasks from './features/tasks/Tasks'
 import TrendPage from './features/trend/TrendPage'
 import SocialMediaList from './features/social-media/SocialMediaList'
+import TopicDetail from './features/social-media/topics/TopicDetail'
+import TopicList from './features/social-media/topics/TopicList'
 import YouTubeOAuthGuide from './features/social-media/YouTubeOAuthGuide'
 import AtomDetail from './features/memory/AtomDetail'
 import AuthPage from './features/auth/Auth'
@@ -32,6 +34,8 @@ function AppRoutes() {
         <Route path="/search" element={<Search />} />
         <Route path="/trends" element={<TrendPage />} />
         <Route path="/social-media/list" element={<SocialMediaList />} />
+        <Route path="/social-media/topics" element={<TopicList />} />
+        <Route path="/social-media/topics/:id" element={<TopicDetail />} />
         <Route path="/settings/social-media/youtube-oauth-guide" element={<YouTubeOAuthGuide />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/settings" element={<Settings />} />
