@@ -34,6 +34,7 @@ class ContentTopicTest(unittest.TestCase):
         )
         task = self.session.get(UserTask, topic.task_id)
         self.assertIsNotNone(task)
+        self.assertEqual(task.category, "自媒体")
         self.assertEqual(task.due_date, "2026-08-22")
 
         update_topic(topic.id, TopicPatch(status="published", timezone="Asia/Shanghai"), self.session)

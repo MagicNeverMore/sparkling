@@ -143,7 +143,7 @@ def _sync_task(topic: ContentTopic, session: Session, timezone_name: str) -> Non
             task = UserTask(
                 title=topic.title,
                 description=topic.description,
-                category="social_media",
+                category="自媒体",
                 due_date=_task_due_date(topic, timezone_name),
             )
             session.add(task)
