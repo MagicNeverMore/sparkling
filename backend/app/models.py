@@ -8,7 +8,19 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -75,6 +87,22 @@ class TaskQueue(Base):
     """本地任务队列，替代 Redis/ARQ。"""
 
     __tablename__ = "task_queue"
+    __table_args__ = (
+        Index(
+            "uq_task_queue_active_dedupe",
+            "dedupe_key",
+            unique=True,
+            sqlite_where=text("dedupe_key IS NOT NULL AND status IN ('pending', 'running')"),
+            postgresql_where=text("dedupe_key IS NOT NULL AND status IN ('pending', 'running')"),
+        ),
+        Index(
+            "uq_task_queue_running_resource",
+            "resource_key",
+            unique=True,
+            sqlite_where=text("resource_key IS NOT NULL AND status = 'running'"),
+            postgresql_where=text("resource_key IS NOT NULL AND status = 'running'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     task_type: Mapped[str] = mapped_column(String, nullable=False)  # embed|link_discover|recluster
@@ -88,6 +116,7 @@ class TaskQueue(Base):
     locked_at: Mapped[datetime | None] = mapped_column(DateTime)
     lease_until: Mapped[datetime | None] = mapped_column(DateTime)
     resource_key: Mapped[str | None] = mapped_column(String)
+    dedupe_key: Mapped[str | None] = mapped_column(String)
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
@@ -165,46 +194,38 @@ class TrendRun(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
-class SocialMediaDataset(Base):
-    """某个平台账号在一个指标日期上的完整日级数据集。"""
+class SocialMediaVideo(Base):
+    """public 视频的不随指标日期变化的基础信息。"""
 
-    __tablename__ = "social_media_dataset"
+    __tablename__ = "social_media_video"
     __table_args__ = (
-        UniqueConstraint(
-            "platform",
-            "external_account_id",
-            "metric_date",
-            name="uq_social_media_dataset_account_date",
-        ),
+        UniqueConstraint("platform", "external_video_id", name="uq_social_media_video_platform_external"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     platform: Mapped[str] = mapped_column(String, nullable=False)
     external_account_id: Mapped[str] = mapped_column(String, nullable=False)
-    metric_date: Mapped[str] = mapped_column(String, nullable=False)  # YYYY-MM-DD，provider 报告日期
-    status: Mapped[str] = mapped_column(String, default="complete", nullable=False)
-    collected_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(default=_now)
-    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
-
-
-class SocialMediaVideoSnapshot(Base):
-    """数据集中一条 public 视频快照；同日重复同步时整批替换。"""
-
-    __tablename__ = "social_media_video_snapshot"
-    __table_args__ = (
-        UniqueConstraint("dataset_id", "external_video_id", name="uq_social_media_video_dataset"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    dataset_id: Mapped[str] = mapped_column(
-        ForeignKey("social_media_dataset.id", ondelete="CASCADE"),
-        nullable=False,
-    )
     external_video_id: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     published_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class SocialMediaVideoMetric(Base):
+    """一条视频在一个数据日期的可变指标。"""
+
+    __tablename__ = "social_media_video_metric"
+    __table_args__ = (
+        UniqueConstraint("video_id", "data_date", name="uq_social_media_video_metric_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("social_media_video.id", ondelete="CASCADE"), nullable=False
+    )
+    data_date: Mapped[str] = mapped_column(String, nullable=False)
     views: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ctr: Mapped[float | None] = mapped_column(Float)
     average_view_duration_seconds: Mapped[float | None] = mapped_column(Float)
@@ -213,18 +234,25 @@ class SocialMediaVideoSnapshot(Base):
     subscribers_lost: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     net_subscribers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
 class SocialMediaSyncRun(Base):
-    """采集运行日志；不会作为 List 的数据来源。"""
+    """真实采集执行记录；只使用 running、done、failed。"""
 
     __tablename__ = "social_media_sync_run"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'done', 'failed')",
+            name="ck_social_media_sync_run_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     platform: Mapped[str] = mapped_column(String, default="youtube", nullable=False)
     external_account_id: Mapped[str | None] = mapped_column(String)
     trigger: Mapped[str] = mapped_column(String, default="manual", nullable=False)
-    status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    status: Mapped[str] = mapped_column(String, default="running", nullable=False)
     metric_date: Mapped[str | None] = mapped_column(String)
     video_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error: Mapped[str | None] = mapped_column(Text)

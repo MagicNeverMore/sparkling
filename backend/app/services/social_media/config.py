@@ -21,8 +21,6 @@ class SocialMediaConfig:
     youtube_refresh_token: str | None
     youtube_channel_id: str | None
     youtube_channel_title: str | None
-    youtube_basic_job_id: str | None
-    youtube_reach_job_id: str | None
     oauth_state: str | None
     oauth_redirect_uri: str | None
     last_run_at: str | None
@@ -36,7 +34,7 @@ class SocialMediaConfig:
 _FIELDS = (
     "schedule_enabled, update_frequency, schedule_time, timezone, "
     "youtube_client_id, youtube_client_secret, youtube_refresh_token, "
-    "youtube_channel_id, youtube_channel_title, youtube_basic_job_id, youtube_reach_job_id, "
+    "youtube_channel_id, youtube_channel_title, "
     "oauth_state, oauth_redirect_uri, last_run_at, next_run_at"
 )
 
@@ -56,8 +54,6 @@ def load_social_media_config() -> SocialMediaConfig:
         youtube_refresh_token=row["youtube_refresh_token"],
         youtube_channel_id=row["youtube_channel_id"],
         youtube_channel_title=row["youtube_channel_title"],
-        youtube_basic_job_id=row["youtube_basic_job_id"],
-        youtube_reach_job_id=row["youtube_reach_job_id"],
         oauth_state=row["oauth_state"],
         oauth_redirect_uri=row["oauth_redirect_uri"],
         last_run_at=row["last_run_at"],
@@ -85,8 +81,6 @@ def update_social_media_config(**fields: object) -> SocialMediaConfig:
         "youtube_refresh_token",
         "youtube_channel_id",
         "youtube_channel_title",
-        "youtube_basic_job_id",
-        "youtube_reach_job_id",
         "oauth_state",
         "oauth_redirect_uri",
         "last_run_at",
@@ -134,8 +128,6 @@ def disconnect_youtube() -> SocialMediaConfig:
         youtube_refresh_token=None,
         youtube_channel_id=None,
         youtube_channel_title=None,
-        youtube_basic_job_id=None,
-        youtube_reach_job_id=None,
         oauth_state=None,
         oauth_redirect_uri=None,
         last_run_at=None,

@@ -1,11 +1,35 @@
 from __future__ import annotations
 
+import logging
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 
 class LogRetentionTest(unittest.TestCase):
+    def test_formatter_redacts_secret_inside_exception_traceback(self) -> None:
+        from app import logger
+
+        formatter = logger._RedactingFormatter(logger.LOG_FORMAT, logger.DATE_FORMAT)
+        try:
+            raise RuntimeError("refresh_token=server-secret")
+        except RuntimeError:
+            record = logging.LogRecord(
+                name="test",
+                level=logging.ERROR,
+                pathname=__file__,
+                lineno=1,
+                msg="database request failed",
+                args=(),
+                exc_info=sys.exc_info(),
+            )
+
+        rendered = formatter.format(record)
+        self.assertIn("RuntimeError", rendered)
+        self.assertIn("refresh_token=[REDACTED]", rendered)
+        self.assertNotIn("server-secret", rendered)
+
     def test_prunes_oldest_managed_backups_to_directory_limit(self) -> None:
         from app import logger
 

@@ -206,8 +206,6 @@ def _ensure_control_db() -> None:
               youtube_refresh_token TEXT,
               youtube_channel_id TEXT,
               youtube_channel_title TEXT,
-              youtube_basic_job_id TEXT,
-              youtube_reach_job_id TEXT,
               oauth_state TEXT,
               oauth_redirect_uri TEXT,
               last_run_at TEXT,

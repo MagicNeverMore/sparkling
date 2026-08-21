@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI, Request
 
-_TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "sparkling-social-media-reporting-test.db")
+_TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "sparkling-social-media-analytics-test.db")
 _TEST_CONTROL_DB_PATH = os.path.join(
     tempfile.gettempdir(),
-    "sparkling-social-media-reporting-control.db",
+    "sparkling-social-media-analytics-control.db",
 )
 os.environ["SPARKLING_DB_PATH"] = _TEST_DB_PATH
 os.environ["SPARKLING_CONTROL_DB_PATH"] = _TEST_CONTROL_DB_PATH
@@ -27,17 +27,233 @@ def _youtube_module() -> ModuleType:
     return youtube
 
 
-def _report(metric_date: str, create_time: str, report_id: str) -> dict[str, str]:
-    return {
-        "id": report_id,
-        "startTime": f"{metric_date}T08:00:00Z",
-        "endTime": f"{metric_date}T08:00:00Z",
-        "createTime": create_time,
-        "downloadUrl": f"https://example.invalid/{report_id}",
-    }
+class SocialMediaAnalyticsTest(unittest.TestCase):
+    def test_analytics_sdk_rows_map_activity_metrics_to_video(self) -> None:
+        youtube = _youtube_module()
 
+        class Request:
+            def __init__(self, body: dict) -> None:
+                self.body = body
 
-class SocialMediaReportingTest(unittest.TestCase):
+            def execute(self) -> dict:
+                return self.body
+
+        class Reports:
+            def query(self, *, metrics: str, **_params: object) -> Request:
+                if metrics.startswith("views,"):
+                    return Request(
+                        {
+                            "columnHeaders": [
+                                {"name": "day"},
+                                {"name": "video"},
+                                {"name": "views"},
+                                {"name": "averageViewDuration"},
+                                {"name": "averageViewPercentage"},
+                                {"name": "subscribersGained"},
+                                {"name": "subscribersLost"},
+                            ],
+                            "rows": [["2026-08-18", "video-1", 42, 63.5, 51.2, 3, 1]],
+                        }
+                    )
+                raise AssertionError("CTR targeted query must not be sent")
+
+        class AnalyticsClient:
+            def reports(self) -> Reports:
+                return Reports()
+
+        videos = [
+            youtube.YouTubeVideo(
+                video_id="video-1",
+                title="Video",
+                published_at=datetime(2026, 8, 20),
+                duration_seconds=120,
+            )
+        ]
+        activity_by_date = youtube._fetch_video_metrics_sdk(
+            AnalyticsClient(),
+            "2026-08-11",
+            "2026-08-20",
+            videos,
+        )
+        metric_date, activity = youtube._select_latest_activity_date(
+            activity_by_date,
+            "2026-08-20",
+        )
+
+        self.assertEqual(metric_date, "2026-08-18")
+        self.assertEqual(activity["video-1"]["views"], 42)
+        self.assertEqual(activity["video-1"]["averageViewDuration"], 63.5)
+        self.assertEqual(activity["video-1"]["subscribersGained"], 3)
+
+    def test_latest_activity_date_uses_most_recent_nonempty_day(self) -> None:
+        youtube = _youtube_module()
+        metric_date, activity = youtube._select_latest_activity_date(
+            {
+                "2026-08-16": {"old-video": {"views": 5}},
+                "2026-08-18": {"new-video": {"views": 8}},
+                "2026-08-19": {},
+            },
+            "2026-08-20",
+        )
+
+        self.assertEqual(metric_date, "2026-08-18")
+        self.assertEqual(activity, {"new-video": {"views": 8}})
+
+    def test_reach_report_csv_maps_ctr_only_for_requested_date(self) -> None:
+        youtube = _youtube_module()
+        payload = (
+            b"date,video_id,video_thumbnail_impressions,video_thumbnail_impressions_ctr\n"
+            b"2026-08-19,video-1,1200,5.25\n"
+            b"2026-08-18,video-2,800,3.5\n"
+        )
+
+        reach = youtube._parse_reach_report_csv(payload, "2026-08-19")
+
+        self.assertEqual(reach, {
+            "video-1": {
+                "videoThumbnailImpressions": "1200",
+                "videoThumbnailImpressionsClickRate": "5.25",
+            }
+        })
+
+    def test_reach_job_is_created_then_csv_is_downloaded_from_reporting_api(self) -> None:
+        youtube = _youtube_module()
+
+        class Request:
+            def __init__(self, body: dict) -> None:
+                self.body = body
+
+            def execute(self) -> dict:
+                return self.body
+
+        class Reports:
+            def list(self, **_params: object) -> Request:
+                return Request({
+                    "reports": [{
+                        "id": "report-1",
+                        "startTime": "2026-08-19T00:00:00Z",
+                        "endTime": "2026-08-19T23:59:59Z",
+                        "downloadUrl": "https://reports.example/report-1",
+                    }]
+                })
+
+        class Jobs:
+            def list(self) -> Request:
+                return Request({"jobs": []})
+
+            def create(self, *, body: dict) -> Request:
+                self.created_body = body
+                return Request({"id": "job-1"})
+
+            def reports(self) -> Reports:
+                return Reports()
+
+        class ReportingClient:
+            def __init__(self) -> None:
+                self.jobs_client = Jobs()
+
+            def jobs(self) -> Jobs:
+                return self.jobs_client
+
+        class Response:
+            status = 200
+
+        client = ReportingClient()
+        with patch.object(
+            youtube,
+            "AuthorizedHttp",
+            return_value=SimpleNamespace(request=lambda *_args, **_kwargs: (Response(), (
+                b"date,video_id,video_thumbnail_impressions,video_thumbnail_impressions_ctr\n"
+                b"2026-08-19,video-1,1200,5.25\n"
+            ))),
+        ):
+            reach = youtube._fetch_reach_metrics_from_reporting_sdk(
+                client,
+                SimpleNamespace(),
+                "2026-08-19",
+            )
+
+        self.assertEqual(client.jobs_client.created_body["reportTypeId"], "channel_reach_basic_a1")
+        self.assertEqual(reach["video-1"]["videoThumbnailImpressionsClickRate"], "5.25")
+
+    def test_fetch_daily_dataset_uses_analytics_adapter(self) -> None:
+        youtube = _youtube_module()
+        expected = youtube.YouTubeDailyDataset(
+            channel_id="UC123",
+            channel_title="Example Channel",
+            metric_date="2026-08-20",
+            videos=[],
+            metrics_by_video={},
+        )
+        config = SimpleNamespace()
+
+        with patch.object(
+            youtube,
+            "_fetch_analytics_dataset",
+            return_value=expected,
+            create=True,
+        ) as fetch:
+            result = asyncio.run(youtube.fetch_daily_dataset(config))
+
+        self.assertIs(result, expected)
+        fetch.assert_called_once_with(config)
+
+    def test_credential_refresh_logs_start_and_completion_without_secrets(self) -> None:
+        youtube = _youtube_module()
+
+        class FakeCredentials:
+            token = "short-lived-access-token"
+            expiry = "2026-08-20T12:00:00Z"
+
+            def __init__(self, **_kwargs: object) -> None:
+                pass
+
+            def refresh(self, _request: object) -> None:
+                pass
+
+        config = SimpleNamespace(
+            youtube_client_id="client-id",
+            youtube_client_secret="client-secret",
+            youtube_refresh_token="refresh-token",
+            youtube_channel_id="UC123",
+        )
+        with (
+            patch.object(youtube, "Credentials", FakeCredentials),
+            patch.object(youtube, "GoogleRequest", return_value=object()),
+            self.assertLogs("app.services.social_media.youtube", level="INFO") as captured,
+        ):
+            credentials = youtube._refresh_credentials(config)
+
+        self.assertIsInstance(credentials, FakeCredentials)
+        messages = "\n".join(captured.output)
+        self.assertIn("youtube.credentials.refresh.start", messages)
+        self.assertIn("youtube.credentials.refresh.done", messages)
+        self.assertNotIn("refresh-token", messages)
+        self.assertNotIn("client-secret", messages)
+
+    def test_oauth_channel_lookup_uses_official_sdk(self) -> None:
+        youtube = _youtube_module()
+        sdk_client = object()
+        with (
+            patch.object(youtube, "build", return_value=sdk_client) as build_client,
+            patch.object(
+                youtube,
+                "_fetch_channel_sdk",
+                return_value=("UC123", "Example", "uploads"),
+            ) as fetch_channel,
+            self.assertLogs("app.services.social_media.youtube", level="INFO") as captured,
+        ):
+            result = youtube._fetch_oauth_channel_with_sdk("temporary-access-token")
+
+        self.assertEqual(result, ("UC123", "Example", "uploads"))
+        build_client.assert_called_once()
+        self.assertEqual(build_client.call_args.args[:2], ("youtube", "v3"))
+        fetch_channel.assert_called_once_with(sdk_client)
+        messages = "\n".join(captured.output)
+        self.assertIn("youtube.oauth.channel_request.start", messages)
+        self.assertIn("youtube.oauth.channel_request.done", messages)
+        self.assertNotIn("temporary-access-token", messages)
+
     def test_callback_never_reports_connected_when_persistence_is_not_visible(self) -> None:
         from app.routers import social_media
         from app.services.social_media.config import SocialMediaConfig
@@ -52,8 +268,6 @@ class SocialMediaReportingTest(unittest.TestCase):
             youtube_refresh_token=None,
             youtube_channel_id=None,
             youtube_channel_title=None,
-            youtube_basic_job_id=None,
-            youtube_reach_job_id=None,
             oauth_state="expected-state",
             oauth_redirect_uri="https://public.example/api/social-media/youtube/oauth/callback",
             last_run_at=None,
@@ -236,33 +450,6 @@ class SocialMediaReportingTest(unittest.TestCase):
         next_run = calculate_next_run_at("hourly", "09:00", "Asia/Shanghai", now)
 
         self.assertEqual(next_run, now + timedelta(hours=1))
-
-    def test_reports_not_ready_keeps_diagnostic_counts(self) -> None:
-        youtube = _youtube_module()
-        with self.assertRaises(youtube.YouTubeReportsNotReadyError) as caught:
-            youtube._latest_common_reports(
-                [_report("2026-08-18", "2026-08-19T10:00:00Z", "basic")],
-                [],
-            )
-
-        self.assertEqual(caught.exception.basic_count, 1)
-        self.assertEqual(caught.exception.reach_count, 0)
-        self.assertEqual(caught.exception.retry_after_seconds, 3600)
-
-    def test_latest_common_date_and_newest_version_are_selected(self) -> None:
-        youtube = _youtube_module()
-        older = _report("2026-08-18", "2026-08-19T10:00:00Z", "basic-old")
-        newer = _report("2026-08-18", "2026-08-19T12:00:00Z", "basic-new")
-        reach = _report("2026-08-18", "2026-08-19T11:00:00Z", "reach")
-
-        metric_date, basic_report, reach_report = youtube._latest_common_reports(
-            [older, newer],
-            [reach],
-        )
-
-        self.assertEqual(metric_date, "2026-08-18")
-        self.assertEqual(basic_report["id"], "basic-new")
-        self.assertEqual(reach_report["id"], "reach")
 
     def test_log_redaction_keeps_context_without_credentials(self) -> None:
         from app.logger import redact_log_text

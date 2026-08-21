@@ -17,7 +17,7 @@ fi
 # 2. 运行 Alembic 数据库迁移
 echo "[entrypoint] 执行数据库迁移..."
 cd /app
-uv run alembic upgrade head
+uv run python -m app.migrate
 
 # 3. 启动应用
 echo "[entrypoint] 启动 Sparkling 服务..."

@@ -1,58 +1,44 @@
-"""YouTube OAuth、public 视频元数据和日级 Reporting 数据读取。"""
+"""YouTube Web OAuth 与官方 Python SDK 的 Analytics 小时快照读取。"""
 from __future__ import annotations
 
 import csv
+import gzip
 import hashlib
 import io
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
+import anyio
 import httpx
+from google.auth.exceptions import RefreshError
+from google.auth.transport.requests import Request as GoogleRequest
+from google_auth_httplib2 import AuthorizedHttp
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from ...logger import get_logger
 from .config import SocialMediaConfig, update_social_media_config
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
-YOUTUBE_API = "https://www.googleapis.com/youtube/v3"
-REPORTING_API = "https://youtubereporting.googleapis.com/v1"
 SCOPES = (
     "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 )
-BASIC_REPORT_TYPE = "channel_basic_a3"
-REACH_REPORT_TYPE = "channel_reach_basic_a1"
 REQUEST_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
-REPORTS_NOT_READY_RETRY_SECONDS = 60 * 60
+ANALYTICS_TIMEZONE = ZoneInfo("America/Los_Angeles")
+ANALYTICS_VIDEO_BATCH_SIZE = 200
+ANALYTICS_LOOKBACK_DAYS = 10
+REPORTING_REACH_REPORT_TYPE = "channel_reach_basic_a1"
+REPORTING_MAX_CANDIDATES = 7
 
 logger = get_logger(__name__)
-
-
-class YouTubeReportsNotReadyError(RuntimeError):
-    """Reporting job 已建立，但 Google 尚未生成可配对的完整日报。"""
-
-    retry_after_seconds = REPORTS_NOT_READY_RETRY_SECONDS
-
-    def __init__(
-        self,
-        *,
-        basic_count: int,
-        reach_count: int,
-        basic_dates: list[str],
-        reach_dates: list[str],
-    ) -> None:
-        self.basic_count = basic_count
-        self.reach_count = reach_count
-        self.basic_dates = basic_dates
-        self.reach_dates = reach_dates
-        super().__init__(
-            "YouTube 日报尚未生成完整的 activity + reach 数据；"
-            f"activity_reports={basic_count} reach_reports={reach_count}，将在稍后自动重试"
-        )
 
 
 def oauth_trace_id(state: str | None) -> str:
@@ -87,6 +73,13 @@ class YouTubeDailyDataset:
     metric_date: str
     videos: list[YouTubeVideo]
     metrics_by_video: dict[str, DailyMetrics]
+    metrics_by_date: dict[str, dict[str, DailyMetrics]] | None = None
+
+    def daily_metrics(self) -> dict[str, dict[str, DailyMetrics]]:
+        """兼容旧调用方；新采集一次返回最近十天所有有数据日期。"""
+        return self.metrics_by_date if self.metrics_by_date is not None else {
+            self.metric_date: self.metrics_by_video
+        }
 
 
 def build_oauth_url(config: SocialMediaConfig, redirect_uri: str) -> str:
@@ -134,6 +127,11 @@ async def exchange_oauth_code(config: SocialMediaConfig, code: str, state: str) 
     if not config.youtube_client_id or not config.youtube_client_secret or not config.oauth_redirect_uri:
         raise ValueError("YouTube OAuth 配置不完整")
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        logger.info(
+            "youtube.oauth.token_request.start trace_id=%s redirect_uri=%s",
+            trace_id,
+            config.oauth_redirect_uri,
+        )
         response = await client.post(
             TOKEN_URL,
             data={
@@ -145,6 +143,11 @@ async def exchange_oauth_code(config: SocialMediaConfig, code: str, state: str) 
             },
         )
         _raise_google_error(response)
+        logger.info(
+            "youtube.oauth.token_request.done trace_id=%s status=%s",
+            trace_id,
+            response.status_code,
+        )
         token = response.json()
         returned_refresh_token = token.get("refresh_token")
         refresh_token = returned_refresh_token or config.youtube_refresh_token
@@ -160,7 +163,10 @@ async def exchange_oauth_code(config: SocialMediaConfig, code: str, state: str) 
         )
         if not refresh_token or not access_token:
             raise ValueError("Google 未返回 offline refresh token，请重新授权")
-        channel_id, channel_title, _uploads = await _fetch_channel(client, access_token)
+        channel_id, channel_title, _uploads = await anyio.to_thread.run_sync(
+            _fetch_oauth_channel_with_sdk,
+            access_token,
+        )
     logger.info(
         "youtube.oauth.exchange.done trace_id=%s channel_id=%s channel_title=%s",
         trace_id,
@@ -171,78 +177,128 @@ async def exchange_oauth_code(config: SocialMediaConfig, code: str, state: str) 
 
 
 async def fetch_daily_dataset(config: SocialMediaConfig) -> YouTubeDailyDataset:
-    logger.info("youtube.dataset.fetch.start channel_id=%s", config.youtube_channel_id)
-    access_token = await refresh_access_token(config)
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        channel_id, channel_title, uploads_playlist_id = await _fetch_channel(client, access_token)
-        videos = await _fetch_public_videos(client, access_token, uploads_playlist_id)
-        basic_job_id, reach_job_id = await _ensure_reporting_jobs(client, access_token, config)
-        basic_reports = await _list_reports(client, access_token, basic_job_id)
-        reach_reports = await _list_reports(client, access_token, reach_job_id)
-        metric_date, basic_report, reach_report = _latest_common_reports(basic_reports, reach_reports)
-        basic_csv, reach_csv = await _download_reports(client, access_token, basic_report, reach_report)
-    basic = _parse_basic_report(basic_csv, metric_date)
-    reach = _parse_reach_report(reach_csv, metric_date)
-    metrics_by_video: dict[str, DailyMetrics] = {}
-    for video in videos:
-        activity = basic.get(video.video_id)
-        reach_metric = reach.get(video.video_id)
-        metrics_by_video[video.video_id] = DailyMetrics(
-            views=activity["views"] if activity else 0,
-            ctr=reach_metric,
-            average_view_duration_seconds=activity["avd"] if activity else None,
-            average_view_percentage=activity["avp"] if activity else None,
-            subscribers_gained=activity["gained"] if activity else 0,
-            subscribers_lost=activity["lost"] if activity else 0,
-        )
-    dataset = YouTubeDailyDataset(
+    """异步 worker 入口；SDK 调用在线程中执行，避免阻塞事件循环。"""
+    # Google SDK/httplib2 是同步 I/O。超时时必须让 worker 协程继续进入失败收尾，
+    # 不可等待卡死的线程，否则 run 会永久保持 running。线程即使晚些返回也只会产出
+    # 内存中的 dataset，collector 会拒绝发布已终结 run 的结果。
+    return await anyio.to_thread.run_sync(_fetch_analytics_dataset, config, abandon_on_cancel=True)
+
+
+def _fetch_analytics_dataset(config: SocialMediaConfig) -> YouTubeDailyDataset:
+    """Analytics adapter 的深模块接口：凭据刷新、官方 SDK 查询、public 视频合并。"""
+    logger.info("youtube.analytics.dataset.start channel_id=%s", config.youtube_channel_id)
+    credentials = _refresh_credentials(config)
+    youtube_client = build("youtube", "v3", credentials=credentials, cache_discovery=False)
+    analytics_client = build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
+    reporting_client = build("youtubereporting", "v1", credentials=credentials, cache_discovery=False)
+    channel_id, channel_title, uploads_playlist_id = _fetch_channel_sdk(youtube_client)
+    videos = _fetch_public_videos_sdk(youtube_client, uploads_playlist_id)
+    # Analytics 指标存在处理延迟。扫描最近十个太平洋日，再使用最新实际有
+    # 视频行的日期，避免固定查询昨天时把未处理完成的数据误记为 0/空。
+    end_date = datetime.now(ANALYTICS_TIMEZONE).date()
+    start_date = end_date - timedelta(days=ANALYTICS_LOOKBACK_DAYS - 1)
+    activity_by_date = _fetch_video_metrics_sdk(
+        analytics_client,
+        start_date.isoformat(),
+        end_date.isoformat(),
+        videos,
+    )
+    metric_date, activity = _select_latest_activity_date(activity_by_date, end_date.isoformat())
+    reach = _fetch_reach_metrics_from_reporting_sdk(
+        reporting_client,
+        credentials,
+        metric_date,
+    )
+    metrics_by_date = {
+        data_date: {
+            video.video_id: _daily_metrics(
+                rows.get(video.video_id, {}),
+                reach if data_date == metric_date else {},
+                video.video_id,
+            )
+            for video in videos
+        }
+        for data_date, rows in activity_by_date.items()
+        if rows
+    }
+    metrics_by_video = metrics_by_date.get(metric_date, {})
+    activity_matches = sum(video.video_id in activity for video in videos)
+    reach_matches = sum(video.video_id in reach for video in videos)
+    logger.info(
+        "youtube.analytics.dataset.ready channel_id=%s metric_date=%s public_videos=%s "
+        "activity_matches=%s reach_matches=%s data_dates=%s",
+        channel_id,
+        metric_date,
+        len(videos),
+        activity_matches,
+        reach_matches,
+        len(metrics_by_date),
+    )
+    return YouTubeDailyDataset(
         channel_id=channel_id,
         channel_title=channel_title,
         metric_date=metric_date,
         videos=videos,
         metrics_by_video=metrics_by_video,
+        metrics_by_date=metrics_by_date,
     )
-    logger.info(
-        "youtube.dataset.fetch.done channel_id=%s metric_date=%s public_videos=%s activity_rows=%s reach_rows=%s",
-        channel_id,
-        metric_date,
-        len(videos),
-        len(basic),
-        len(reach),
-    )
-    return dataset
 
 
-async def refresh_access_token(config: SocialMediaConfig) -> str:
+def _daily_metrics(
+    activity: dict[str, Any],
+    reach: dict[str, dict[str, Any]],
+    video_id: str,
+) -> DailyMetrics:
+    return DailyMetrics(
+        views=_int_metric(activity.get("views")),
+        ctr=_optional_float(reach.get(video_id, {}).get("videoThumbnailImpressionsClickRate")),
+        average_view_duration_seconds=_optional_float(activity.get("averageViewDuration")),
+        average_view_percentage=_optional_float(activity.get("averageViewPercentage")),
+        subscribers_gained=_int_metric(activity.get("subscribersGained")),
+        subscribers_lost=_int_metric(activity.get("subscribersLost")),
+    )
+
+
+def _refresh_credentials(config: SocialMediaConfig) -> Credentials:
     if not config.youtube_client_id or not config.youtube_client_secret or not config.youtube_refresh_token:
         raise ValueError("YouTube 尚未连接或 OAuth 配置不完整")
-    logger.debug("youtube.token.refresh.start channel_id=%s", config.youtube_channel_id)
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        response = await client.post(
-            TOKEN_URL,
-            data={
-                "client_id": config.youtube_client_id,
-                "client_secret": config.youtube_client_secret,
-                "refresh_token": config.youtube_refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
-    _raise_google_error(response)
-    token = response.json().get("access_token")
-    if not token:
-        raise ValueError("Google access token 刷新失败")
-    logger.debug("youtube.token.refresh.done channel_id=%s", config.youtube_channel_id)
-    return str(token)
-
-
-async def _fetch_channel(client: httpx.AsyncClient, token: str) -> tuple[str, str, str]:
-    response = await client.get(
-        f"{YOUTUBE_API}/channels",
-        params={"part": "snippet,contentDetails", "mine": "true"},
-        headers=_auth_headers(token),
+    credentials = Credentials(
+        token=None,
+        refresh_token=config.youtube_refresh_token,
+        token_uri=TOKEN_URL,
+        client_id=config.youtube_client_id,
+        client_secret=config.youtube_client_secret,
+        scopes=SCOPES,
     )
-    _raise_google_error(response)
-    items = response.json().get("items") or []
+    logger.info(
+        "youtube.credentials.refresh.start channel_id=%s refresh_credential_present=%s",
+        config.youtube_channel_id,
+        bool(config.youtube_refresh_token),
+    )
+    try:
+        credentials.refresh(GoogleRequest())
+    except RefreshError as exc:
+        logger.exception("youtube.credentials.refresh.failed channel_id=%s error=%s", config.youtube_channel_id, exc)
+        raise ValueError("YouTube credential 刷新失败，请重新连接账号") from exc
+    except Exception:
+        logger.exception("youtube.credentials.refresh.failed channel_id=%s", config.youtube_channel_id)
+        raise
+    logger.info(
+        "youtube.credentials.refresh.done channel_id=%s access_credential_present=%s expiry=%s",
+        config.youtube_channel_id,
+        bool(credentials.token),
+        credentials.expiry,
+    )
+    return credentials
+
+
+def _fetch_channel_sdk(youtube_client: Any) -> tuple[str, str, str]:
+    body = _execute_google_request(
+        youtube_client.channels().list(part="snippet,contentDetails", mine=True),
+        service="youtube",
+        operation="channels.list",
+    )
+    items = body.get("items") or []
     if not items:
         raise ValueError("当前 Google 账号没有可访问的 YouTube 频道")
     channel = items[0]
@@ -251,30 +307,21 @@ async def _fetch_channel(client: httpx.AsyncClient, token: str) -> tuple[str, st
         str(channel.get("snippet", {}).get("title") or channel["id"]),
         str(channel["contentDetails"]["relatedPlaylists"]["uploads"]),
     )
-    logger.debug("youtube.channel.fetched channel_id=%s channel_title=%s", result[0], result[1])
+    logger.info("youtube.api.channel.ready channel_id=%s channel_title=%s", result[0], result[1])
     return result
 
 
-async def _fetch_public_videos(
-    client: httpx.AsyncClient,
-    token: str,
-    uploads_playlist_id: str,
-) -> list[YouTubeVideo]:
+def _fetch_public_videos_sdk(youtube_client: Any, uploads_playlist_id: str) -> list[YouTubeVideo]:
     ids: list[str] = []
     page_token: str | None = None
-    page_count = 0
     while True:
-        params = {"part": "contentDetails", "playlistId": uploads_playlist_id, "maxResults": 50}
-        if page_token:
-            params["pageToken"] = page_token
-        response = await client.get(
-            f"{YOUTUBE_API}/playlistItems",
-            params=params,
-            headers=_auth_headers(token),
+        request = youtube_client.playlistItems().list(
+            part="contentDetails",
+            playlistId=uploads_playlist_id,
+            maxResults=50,
+            **({"pageToken": page_token} if page_token else {}),
         )
-        _raise_google_error(response)
-        body = response.json()
-        page_count += 1
+        body = _execute_google_request(request, service="youtube", operation="playlistItems.list")
         ids.extend(
             str(item.get("contentDetails", {}).get("videoId"))
             for item in body.get("items") or []
@@ -286,13 +333,15 @@ async def _fetch_public_videos(
 
     videos: list[YouTubeVideo] = []
     for index in range(0, len(ids), 50):
-        response = await client.get(
-            f"{YOUTUBE_API}/videos",
-            params={"part": "snippet,contentDetails,status", "id": ",".join(ids[index : index + 50])},
-            headers=_auth_headers(token),
+        body = _execute_google_request(
+            youtube_client.videos().list(
+                part="snippet,contentDetails,status",
+                id=",".join(ids[index : index + 50]),
+            ),
+            service="youtube",
+            operation="videos.list",
         )
-        _raise_google_error(response)
-        for item in response.json().get("items") or []:
+        for item in body.get("items") or []:
             if item.get("status", {}).get("privacyStatus") != "public":
                 continue
             snippet = item.get("snippet", {})
@@ -301,208 +350,318 @@ async def _fetch_public_videos(
                     video_id=str(item["id"]),
                     title=str(snippet.get("title") or item["id"]),
                     published_at=_parse_google_datetime(str(snippet["publishedAt"])),
-                    duration_seconds=_parse_duration(str(item.get("contentDetails", {}).get("duration") or "PT0S")),
+                    duration_seconds=_parse_duration(
+                        str(item.get("contentDetails", {}).get("duration") or "PT0S")
+                    ),
                 )
             )
     result = sorted(videos, key=lambda video: video.published_at, reverse=True)
+    logger.info("youtube.api.public_videos.ready upload_items=%s public_videos=%s", len(ids), len(result))
+    return result
+
+
+def _fetch_video_metrics_sdk(
+    analytics_client: Any,
+    start_date: str,
+    end_date: str,
+    videos: list[YouTubeVideo],
+) -> dict[str, dict[str, dict[str, Any]]]:
+    activity_by_date: dict[str, dict[str, dict[str, Any]]] = {}
+    for index in range(0, len(videos), ANALYTICS_VIDEO_BATCH_SIZE):
+        video_ids = [video.video_id for video in videos[index : index + ANALYTICS_VIDEO_BATCH_SIZE]]
+        if not video_ids:
+            continue
+        common = {
+            "ids": "channel==MINE",
+            "startDate": start_date,
+            "endDate": end_date,
+            "dimensions": "day,video",
+            "filters": f"video=={','.join(video_ids)}",
+            "maxResults": ANALYTICS_VIDEO_BATCH_SIZE * ANALYTICS_LOOKBACK_DAYS,
+        }
+        rows = _query_analytics_rows_by_day(
+            analytics_client,
+            start_date,
+            end_date,
+            "views,averageViewDuration,averageViewPercentage,subscribersGained,subscribersLost",
+            common,
+        )
+        for day, metrics_by_video in rows.items():
+            activity_by_date.setdefault(day, {}).update(metrics_by_video)
     logger.info(
-        "youtube.videos.fetched upload_items=%s public_videos=%s playlist_pages=%s",
-        len(ids),
+        "youtube.analytics.metrics.ready start_date=%s end_date=%s dates=%s activity_rows=%s",
+        start_date,
+        end_date,
+        len(activity_by_date),
+        sum(len(rows) for rows in activity_by_date.values()),
+    )
+    return activity_by_date
+
+
+def _select_latest_activity_date(
+    activity_by_date: dict[str, dict[str, dict[str, Any]]],
+    fallback_date: str,
+) -> tuple[str, dict[str, dict[str, Any]]]:
+    available_dates = [day for day, rows in activity_by_date.items() if rows]
+    if not available_dates:
+        logger.warning(
+            "youtube.analytics.latest_date_unavailable fallback_date=%s",
+            fallback_date,
+        )
+        return fallback_date, {}
+    metric_date = max(available_dates)
+    activity = activity_by_date[metric_date]
+    logger.info(
+        "youtube.analytics.latest_date_selected metric_date=%s videos=%s",
+        metric_date,
+        len(activity),
+    )
+    return metric_date, activity
+
+
+def _query_analytics_rows_by_day(
+    analytics_client: Any,
+    start_date: str,
+    end_date: str,
+    metrics: str,
+    params: dict[str, Any],
+) -> dict[str, dict[str, dict[str, Any]]]:
+    logger.info(
+        "youtube.analytics.query.start start_date=%s end_date=%s metrics=%s video_count=%s",
+        start_date,
+        end_date,
+        metrics,
+        len(str(params["filters"]).removeprefix("video==").split(",")),
+    )
+    body = _execute_google_request(
+        analytics_client.reports().query(metrics=metrics, **params),
+        service="youtubeAnalytics",
+        operation="reports.query",
+    )
+    headers = [str(column.get("name")) for column in body.get("columnHeaders") or []]
+    day_index = headers.index("day") if "day" in headers else None
+    video_index = headers.index("video") if "video" in headers else None
+    result: dict[str, dict[str, dict[str, Any]]] = {}
+    for values in body.get("rows") or []:
+        if day_index is None or video_index is None or not values:
+            continue
+        day, video_id = values[day_index], values[video_index]
+        if day and video_id:
+            result.setdefault(str(day), {})[str(video_id)] = dict(zip(headers, values, strict=False))
+    logger.info(
+        "youtube.analytics.query.done start_date=%s end_date=%s metrics=%s dates=%s rows=%s columns=%s",
+        start_date,
+        end_date,
+        metrics,
         len(result),
-        page_count,
+        sum(len(rows) for rows in result.values()),
+        headers,
     )
     return result
 
 
-async def _ensure_reporting_jobs(
-    client: httpx.AsyncClient,
-    token: str,
-    config: SocialMediaConfig,
-) -> tuple[str, str]:
-    response = await client.get(f"{REPORTING_API}/jobs", headers=_auth_headers(token))
-    _raise_google_error(response)
-    jobs = response.json().get("jobs") or []
-    by_type = {str(job.get("reportTypeId")): str(job["id"]) for job in jobs}
-    logger.info(
-        "youtube.reporting.jobs.list total=%s activity_present=%s reach_present=%s",
-        len(jobs),
-        BASIC_REPORT_TYPE in by_type,
-        REACH_REPORT_TYPE in by_type,
-    )
-    basic_id = config.youtube_basic_job_id or by_type.get(BASIC_REPORT_TYPE)
-    reach_id = config.youtube_reach_job_id or by_type.get(REACH_REPORT_TYPE)
-    if not basic_id:
-        basic_id = await _create_job(client, token, BASIC_REPORT_TYPE, "Sparkling daily activity")
-    if not reach_id:
-        reach_id = await _create_job(client, token, REACH_REPORT_TYPE, "Sparkling daily reach")
-    if basic_id != config.youtube_basic_job_id or reach_id != config.youtube_reach_job_id:
-        update_social_media_config(youtube_basic_job_id=basic_id, youtube_reach_job_id=reach_id)
-    logger.info("youtube.reporting.jobs.ready activity_job_id=%s reach_job_id=%s", basic_id, reach_id)
-    return basic_id, reach_id
+def _fetch_reach_metrics_from_reporting_sdk(
+    reporting_client: Any,
+    credentials: Credentials,
+    metric_date: str,
+) -> dict[str, dict[str, Any]]:
+    """从官方 Reporting API 下载已生成的 Reach CSV，并只返回目标日期的视频 CTR。
 
+    Reporting API 的 Job/Report 元数据是 JSON；Google 规定下载的报表正文为 CSV。
+    CSV 仅在内存中解析，绝不作为应用文件留存。报表尚未生成属于正常延迟，不影响
+    同一轮中其他 Analytics API 指标的入库。
+    """
+    job_id = _get_or_create_reach_reporting_job(reporting_client)
+    reports = _list_reporting_reports(reporting_client, job_id)
+    candidates = [
+        report for report in reports
+        if _report_may_include_date(report, metric_date)
+    ][:REPORTING_MAX_CANDIDATES]
+    if not candidates:
+        logger.info(
+            "youtube.reporting.reach_not_ready job_id=%s metric_date=%s available_reports=%s",
+            job_id,
+            metric_date,
+            len(reports),
+        )
+        return {}
 
-async def _create_job(client: httpx.AsyncClient, token: str, report_type: str, name: str) -> str:
-    response = await client.post(
-        f"{REPORTING_API}/jobs",
-        json={"reportTypeId": report_type, "name": name},
-        headers=_auth_headers(token),
-    )
-    _raise_google_error(response)
-    body = response.json()
-    job_id = str(body["id"])
+    for report in candidates:
+        report_id = str(report.get("id") or "unknown")
+        download_url = report.get("downloadUrl")
+        if not isinstance(download_url, str) or not download_url:
+            logger.warning(
+                "youtube.reporting.reach_report_missing_download_url job_id=%s report_id=%s",
+                job_id,
+                report_id,
+            )
+            continue
+        payload = _download_reporting_csv(credentials, download_url, job_id, report_id)
+        rows = _parse_reach_report_csv(payload, metric_date)
+        if rows:
+            logger.info(
+                "youtube.reporting.reach.ready job_id=%s report_id=%s metric_date=%s video_rows=%s",
+                job_id,
+                report_id,
+                metric_date,
+                len(rows),
+            )
+            return rows
+
     logger.info(
-        "youtube.reporting.job.created report_type=%s job_id=%s create_time=%s",
-        report_type,
+        "youtube.reporting.reach_not_ready job_id=%s metric_date=%s reason=no_matching_rows",
         job_id,
-        body.get("createTime"),
+        metric_date,
     )
-    return job_id
+    return {}
 
 
-async def _list_reports(client: httpx.AsyncClient, token: str, job_id: str) -> list[dict[str, Any]]:
+def _get_or_create_reach_reporting_job(reporting_client: Any) -> str:
+    body = _execute_google_request(
+        reporting_client.jobs().list(),
+        service="youtubeReporting",
+        operation="jobs.list",
+    )
+    for job in body.get("jobs") or []:
+        if job.get("reportTypeId") == REPORTING_REACH_REPORT_TYPE and job.get("id"):
+            job_id = str(job["id"])
+            logger.info("youtube.reporting.reach_job.reused job_id=%s", job_id)
+            return job_id
+
+    body = _execute_google_request(
+        reporting_client.jobs().create(
+            body={
+                "reportTypeId": REPORTING_REACH_REPORT_TYPE,
+                "name": "Sparkling video CTR reach report",
+            }
+        ),
+        service="youtubeReporting",
+        operation="jobs.create",
+    )
+    job_id = body.get("id")
+    if not job_id:
+        raise ValueError("YouTube Reporting API 未返回 Reach Report Job ID")
+    logger.info("youtube.reporting.reach_job.created job_id=%s", job_id)
+    return str(job_id)
+
+
+def _list_reporting_reports(reporting_client: Any, job_id: str) -> list[dict[str, Any]]:
     reports: list[dict[str, Any]] = []
     page_token: str | None = None
     while True:
-        params: dict[str, object] = {"pageSize": 100}
-        if page_token:
-            params["pageToken"] = page_token
-        response = await client.get(
-            f"{REPORTING_API}/jobs/{job_id}/reports",
-            params=params,
-            headers=_auth_headers(token),
+        body = _execute_google_request(
+            reporting_client.jobs().reports().list(
+                jobId=job_id,
+                **({"pageToken": page_token} if page_token else {}),
+            ),
+            service="youtubeReporting",
+            operation="jobs.reports.list",
         )
-        _raise_google_error(response)
-        body = response.json()
-        reports.extend(body.get("reports") or [])
+        reports.extend(report for report in body.get("reports") or [] if isinstance(report, dict))
         page_token = body.get("nextPageToken")
         if not page_token:
-            dates = sorted({str(report.get("startTime") or "")[:10] for report in reports if report.get("startTime")})
-            logger.info(
-                "youtube.reporting.reports.list job_id=%s count=%s earliest=%s latest=%s",
-                job_id,
-                len(reports),
-                dates[0] if dates else None,
-                dates[-1] if dates else None,
-            )
-            return reports
+            break
+    return sorted(reports, key=lambda report: str(report.get("startTime") or ""), reverse=True)
 
 
-def _latest_common_reports(
-    basic_reports: list[dict[str, Any]],
-    reach_reports: list[dict[str, Any]],
-) -> tuple[str, dict[str, Any], dict[str, Any]]:
-    def latest_by_date(reports: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-        result: dict[str, dict[str, Any]] = {}
-        for report in reports:
-            metric_date = str(report.get("startTime") or "")[:10]
-            if not metric_date:
-                continue
-            current = result.get(metric_date)
-            if current is None or str(report.get("createTime") or "") > str(current.get("createTime") or ""):
-                result[metric_date] = report
-        return result
+def _report_may_include_date(report: dict[str, Any], metric_date: str) -> bool:
+    start = str(report.get("startTime") or "")[:10]
+    end = str(report.get("endTime") or "")[:10]
+    return bool(start and end and start <= metric_date <= end)
 
-    basic = latest_by_date(basic_reports)
-    reach = latest_by_date(reach_reports)
-    common = sorted(set(basic) & set(reach))
-    if not common:
-        basic_dates = sorted(basic)
-        reach_dates = sorted(reach)
-        logger.warning(
-            "youtube.reporting.reports.not_ready activity_count=%s reach_count=%s activity_latest=%s reach_latest=%s",
-            len(basic_reports),
-            len(reach_reports),
-            basic_dates[-1] if basic_dates else None,
-            reach_dates[-1] if reach_dates else None,
-        )
-        raise YouTubeReportsNotReadyError(
-            basic_count=len(basic_reports),
-            reach_count=len(reach_reports),
-            basic_dates=basic_dates,
-            reach_dates=reach_dates,
-        )
-    metric_date = common[-1]
+
+def _download_reporting_csv(
+    credentials: Credentials,
+    download_url: str,
+    job_id: str,
+    report_id: str,
+) -> bytes:
     logger.info(
-        "youtube.reporting.reports.selected metric_date=%s common_dates=%s",
-        metric_date,
-        len(common),
+        "youtube.reporting.download.start job_id=%s report_id=%s",
+        job_id,
+        report_id,
     )
-    return metric_date, basic[metric_date], reach[metric_date]
-
-
-async def _download_reports(
-    client: httpx.AsyncClient,
-    token: str,
-    basic_report: dict[str, Any],
-    reach_report: dict[str, Any],
-) -> tuple[str, str]:
-    async def download(report: dict[str, Any]) -> str:
-        url = report.get("downloadUrl")
-        if not url:
-            raise ValueError("YouTube report 缺少 downloadUrl")
-        response = await client.get(str(url), headers=_auth_headers(token))
-        _raise_google_error(response)
-        return response.text
-
-    basic_csv, reach_csv = await download(basic_report), await download(reach_report)
+    try:
+        response, payload = AuthorizedHttp(credentials).request(download_url, method="GET")
+        status = int(getattr(response, "status", 0))
+        if not 200 <= status < 300:
+            raise ValueError(f"HTTP {status}")
+    except Exception as exc:
+        logger.exception(
+            "youtube.reporting.download.failed job_id=%s report_id=%s error=%s",
+            job_id,
+            report_id,
+            exc,
+        )
+        raise ValueError("YouTube Reach Report 下载失败") from exc
     logger.info(
-        "youtube.reporting.reports.downloaded metric_date=%s activity_bytes=%s reach_bytes=%s",
-        str(basic_report.get("startTime") or "")[:10],
-        len(basic_csv.encode("utf-8")),
-        len(reach_csv.encode("utf-8")),
+        "youtube.reporting.download.done job_id=%s report_id=%s bytes=%s",
+        job_id,
+        report_id,
+        len(payload),
     )
-    return basic_csv, reach_csv
+    return bytes(payload)
 
 
-def _parse_basic_report(raw: str, metric_date: str) -> dict[str, dict[str, float | int | None]]:
-    totals: dict[str, dict[str, float]] = {}
-    for row in csv.DictReader(io.StringIO(raw)):
+def _parse_reach_report_csv(payload: bytes, metric_date: str) -> dict[str, dict[str, Any]]:
+    if payload.startswith(b"\x1f\x8b"):
+        payload = gzip.decompress(payload)
+    reader = csv.DictReader(io.StringIO(payload.decode("utf-8-sig")))
+    result: dict[str, dict[str, Any]] = {}
+    for row in reader:
         if row.get("date") != metric_date or not row.get("video_id"):
             continue
-        video_id = str(row["video_id"])
-        entry = totals.setdefault(
-            video_id,
-            {"views": 0.0, "watch_seconds": 0.0, "avp_weighted": 0.0, "avp_views": 0.0, "gained": 0.0, "lost": 0.0},
-        )
-        views = _float(row.get("views"))
-        entry["views"] += views
-        entry["watch_seconds"] += _float(row.get("watch_time_minutes")) * 60
-        if row.get("average_view_duration_percentage") not in {None, ""} and views > 0:
-            entry["avp_weighted"] += _float(row.get("average_view_duration_percentage")) * views
-            entry["avp_views"] += views
-        entry["gained"] += _float(row.get("subscribers_gained"))
-        entry["lost"] += _float(row.get("subscribers_lost"))
-    result: dict[str, dict[str, float | int | None]] = {}
-    for video_id, entry in totals.items():
-        views = int(entry["views"])
-        result[video_id] = {
-            "views": views,
-            "avd": entry["watch_seconds"] / entry["views"] if entry["views"] else None,
-            "avp": entry["avp_weighted"] / entry["avp_views"] if entry["avp_views"] else None,
-            "gained": int(entry["gained"]),
-            "lost": int(entry["lost"]),
+        result[str(row["video_id"])] = {
+            "videoThumbnailImpressions": row.get("video_thumbnail_impressions"),
+            "videoThumbnailImpressionsClickRate": row.get("video_thumbnail_impressions_ctr"),
         }
+    logger.info(
+        "youtube.reporting.parse.done metric_date=%s video_rows=%s",
+        metric_date,
+        len(result),
+    )
     return result
 
 
-def _parse_reach_report(raw: str, metric_date: str) -> dict[str, float | None]:
-    totals: dict[str, tuple[float, float]] = {}
-    for row in csv.DictReader(io.StringIO(raw)):
-        if row.get("date") != metric_date or not row.get("video_id"):
-            continue
-        video_id = str(row["video_id"])
-        impressions = _float(row.get("video_thumbnail_impressions"))
-        ctr = _float(row.get("video_thumbnail_impressions_ctr"))
-        weighted, total_impressions = totals.get(video_id, (0.0, 0.0))
-        totals[video_id] = (weighted + ctr * impressions, total_impressions + impressions)
-    return {
-        video_id: weighted / impressions if impressions else None
-        for video_id, (weighted, impressions) in totals.items()
-    }
+def _execute_google_request(request: Any, *, service: str, operation: str) -> dict[str, Any]:
+    logger.info("youtube.api.request.start service=%s operation=%s", service, operation)
+    try:
+        body = request.execute()
+    except HttpError as exc:
+        status = getattr(exc.resp, "status", "unknown")
+        logger.exception("youtube.api.request.failed service=%s operation=%s status=%s", service, operation, status)
+        raise ValueError(f"YouTube {service} {operation} 请求失败 ({status})") from exc
+    except Exception:
+        logger.exception("youtube.api.request.failed service=%s operation=%s", service, operation)
+        raise
+    logger.info("youtube.api.request.done service=%s operation=%s", service, operation)
+    return body
 
 
-def _auth_headers(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+def _int_metric(value: Any) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fetch_oauth_channel_with_sdk(access_token: str) -> tuple[str, str, str]:
+    """OAuth code 兑换完成后，用官方 SDK 验证获授权频道。"""
+    logger.info("youtube.oauth.channel_request.start")
+    credentials = Credentials(token=access_token, scopes=SCOPES)
+    client = build("youtube", "v3", credentials=credentials, cache_discovery=False)
+    result = _fetch_channel_sdk(client)
+    logger.info("youtube.oauth.channel_request.done channel_id=%s", result[0])
+    return result
 
 
 def _raise_google_error(response: httpx.Response) -> None:
@@ -552,10 +711,3 @@ def _parse_duration(value: str) -> int:
         return 0
     days, hours, minutes, seconds = (int(part or 0) for part in match.groups())
     return days * 86400 + hours * 3600 + minutes * 60 + seconds
-
-
-def _float(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0

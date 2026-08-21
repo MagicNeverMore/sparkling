@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import exists, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from ..logger import get_logger
@@ -42,6 +43,7 @@ def enqueue(
     *,
     priority: int = 0,
     resource_key: str | None = None,
+    dedupe_key: str | None = None,
     available_at: datetime | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> TaskQueue:
@@ -55,6 +57,7 @@ def enqueue(
         priority=int(priority or 0),
         available_at=available_at or datetime.utcnow(),
         resource_key=resource_key or default_resource_key(task_type, payload),
+        dedupe_key=dedupe_key,
     )
     session.add(task)
     session.commit()
@@ -137,22 +140,32 @@ def claim_next(
                 .where(active_task.resource_key == candidate.resource_key)
                 .where(or_(active_task.lease_until.is_(None), active_task.lease_until > now))
             )
-        updated_count = updated.update(
-            {
-                "status": "running",
-                "attempts": TaskQueue.attempts + 1,
-                "locked_by": worker_id,
-                "locked_at": now,
-                "lease_until": lease_until,
-                "last_error": None,
-                "updated_at": now,
-            },
-            synchronize_session=False,
-        )
-        if updated_count != 1:
+        try:
+            updated_count = updated.update(
+                {
+                    "status": "running",
+                    "attempts": TaskQueue.attempts + 1,
+                    "locked_by": worker_id,
+                    "locked_at": now,
+                    "lease_until": lease_until,
+                    "last_error": None,
+                    "updated_at": now,
+                },
+                synchronize_session=False,
+            )
+            if updated_count != 1:
+                session.rollback()
+                continue
+            session.commit()
+        except IntegrityError:
+            # 数据库 partial unique index 是多 worker 资源互斥的最终防线。
             session.rollback()
+            logger.debug(
+                "任务 %s 数据库资源锁冲突，跳过 resource=%s",
+                candidate.id,
+                candidate.resource_key,
+            )
             continue
-        session.commit()
         task = session.get(TaskQueue, candidate.id)
         if task is not None:
             logger.debug("已领取任务 id=%s type=%s lease_until=%s", task.id, task.task_type, task.lease_until)
