@@ -31,6 +31,8 @@ export default defineConfig(({ mode }) => {
           ],
         },
         workbox: {
+          // OAuth callback 等后端导航必须直达 API，不能被 SPA app shell 接管。
+          navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
             {
               urlPattern: ({ url }) =>
