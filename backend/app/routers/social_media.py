@@ -2,19 +2,22 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta
 from typing import Literal, Optional
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, field_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..config import config as app_config
 from ..db import get_session
 from ..logger import get_logger
-from ..models import SocialMediaDataset, SocialMediaSyncRun, SocialMediaVideoSnapshot
+from ..models import SocialMediaSyncRun, SocialMediaVideo, SocialMediaVideoMetric, TaskQueue
 from ..services.social_media.collector import (
+    SOCIAL_MEDIA_RUN_TIMEOUT_SECONDS,
     calculate_next_run_at,
     enqueue_social_media_task,
 )
@@ -115,21 +118,29 @@ class SocialMediaVideoOut(BaseModel):
     title: str
     published_at: str
     platform: str
+    duration_seconds: int
+
+
+class SocialMediaVideoListOut(BaseModel):
+    total: int
+    items: list[SocialMediaVideoOut]
+
+
+class SocialMediaVideoMetricOut(BaseModel):
+    video_id: str
     ctr: Optional[float]
     average_view_duration_seconds: Optional[float]
     average_view_percentage: Optional[float]
-    duration_seconds: int
     views: int
     subscribers_gained: int
     subscribers_lost: int
     net_subscribers: int
 
 
-class SocialMediaListOut(BaseModel):
-    metric_date: Optional[str]
-    collected_at: Optional[str]
-    total: int
-    items: list[SocialMediaVideoOut]
+class SocialMediaMetricListOut(BaseModel):
+    data_date: Optional[str]
+    updated_at: Optional[str]
+    items: list[SocialMediaVideoMetricOut]
 
 
 def _masked(value: str | None) -> str | None:
@@ -367,38 +378,78 @@ def run_social_media_sync(session: Session = Depends(get_session)) -> SocialMedi
 
 @router.get("/runs/latest", response_model=Optional[SocialMediaRunOut])
 def latest_social_media_run(session: Session = Depends(get_session)) -> Optional[SocialMediaRunOut]:
+    _expire_timed_out_social_media_runs(session)
     run = session.query(SocialMediaSyncRun).order_by(SocialMediaSyncRun.created_at.desc()).first()
     return _run_out(run) if run else None
 
 
-@router.get("/videos", response_model=SocialMediaListOut)
+def _expire_timed_out_social_media_runs(session: Session) -> None:
+    """读取状态时也执行超时兜底，避免 worker 异常退出后 UI 永久显示同步中。"""
+    now = datetime.utcnow()
+    cutoff = now - timedelta(seconds=SOCIAL_MEDIA_RUN_TIMEOUT_SECONDS)
+    runs = (
+        session.query(SocialMediaSyncRun)
+        .filter(SocialMediaSyncRun.status == "running")
+        .filter(SocialMediaSyncRun.started_at.is_not(None))
+        .filter(SocialMediaSyncRun.started_at <= cutoff)
+        .all()
+    )
+    if not runs:
+        return
+    for run in runs:
+        error = f"任务执行超时（>{SOCIAL_MEDIA_RUN_TIMEOUT_SECONDS}s）"
+        run.status = "failed"
+        run.finished_at = now
+        run.error = error
+        run.updated_at = now
+        task = (
+            session.query(TaskQueue)
+            .filter(TaskQueue.task_type == "social_media_collect")
+            .filter(TaskQueue.status == "running")
+            .filter(TaskQueue.payload.contains(run.id))
+            .one_or_none()
+        )
+        if task is not None:
+            task.status = "failed"
+            task.last_error = error
+            task.locked_by = None
+            task.locked_at = None
+            task.lease_until = None
+            task.updated_at = now
+        logger.error(
+            "social_media.sync.timeout_reconciled run_id=%s task_id=%s timeout_seconds=%s",
+            run.id,
+            task.id if task is not None else None,
+            SOCIAL_MEDIA_RUN_TIMEOUT_SECONDS,
+        )
+    session.commit()
+
+
+@router.get("/videos", response_model=SocialMediaVideoListOut)
 def list_social_media_videos(
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    video_id: str | None = Query(default=None),
+    title: str | None = Query(default=None),
+    published_from: datetime | None = Query(default=None),
+    published_to: datetime | None = Query(default=None),
+    platform: str | None = Query(default=None),
     session: Session = Depends(get_session),
-) -> SocialMediaListOut:
-    config = load_social_media_config()
-    query = (
-        session.query(SocialMediaDataset)
-        .filter(SocialMediaDataset.platform == "youtube")
-        .filter(SocialMediaDataset.status == "complete")
-    )
-    if config.youtube_channel_id:
-        query = query.filter(SocialMediaDataset.external_account_id == config.youtube_channel_id)
-    dataset = query.order_by(
-        SocialMediaDataset.metric_date.desc(),
-        SocialMediaDataset.collected_at.desc(),
-    ).first()
-    if dataset is None:
-        return SocialMediaListOut(metric_date=None, collected_at=None, total=0, items=[])
-    snapshots = session.query(SocialMediaVideoSnapshot).filter(
-        SocialMediaVideoSnapshot.dataset_id == dataset.id
-    )
-    total = snapshots.count()
-    page = snapshots.order_by(SocialMediaVideoSnapshot.published_at.desc()).offset(offset).limit(limit).all()
-    return SocialMediaListOut(
-        metric_date=dataset.metric_date,
-        collected_at=utc_isoformat(dataset.collected_at),
+) -> SocialMediaVideoListOut:
+    query = session.query(SocialMediaVideo)
+    if video_id:
+        query = query.filter(SocialMediaVideo.external_video_id == video_id)
+    if title:
+        query = query.filter(SocialMediaVideo.title.ilike(f"%{title}%"))
+    if published_from:
+        query = query.filter(SocialMediaVideo.published_at >= published_from)
+    if published_to:
+        query = query.filter(SocialMediaVideo.published_at <= published_to)
+    if platform:
+        query = query.filter(SocialMediaVideo.platform == platform)
+    total = query.count()
+    page = query.order_by(SocialMediaVideo.published_at.desc()).offset(offset).limit(limit).all()
+    return SocialMediaVideoListOut(
         total=total,
         items=[
             SocialMediaVideoOut(
@@ -406,16 +457,37 @@ def list_social_media_videos(
                 external_video_id=item.external_video_id,
                 title=item.title,
                 published_at=utc_isoformat(item.published_at),
-                platform="YouTube",
+                platform=item.platform,
+                duration_seconds=item.duration_seconds,
+            )
+            for item in page
+        ],
+    )
+
+
+@router.get("/video-metrics", response_model=SocialMediaMetricListOut)
+def list_latest_social_media_video_metrics(
+    session: Session = Depends(get_session),
+) -> SocialMediaMetricListOut:
+    data_date = session.query(func.max(SocialMediaVideoMetric.data_date)).scalar()
+    if data_date is None:
+        return SocialMediaMetricListOut(data_date=None, updated_at=None, items=[])
+    items = session.query(SocialMediaVideoMetric).filter_by(data_date=data_date).all()
+    updated_at = max((item.updated_at for item in items), default=None)
+    return SocialMediaMetricListOut(
+        data_date=data_date,
+        updated_at=utc_isoformat(updated_at) if updated_at else None,
+        items=[
+            SocialMediaVideoMetricOut(
+                video_id=item.video_id,
                 ctr=item.ctr,
                 average_view_duration_seconds=item.average_view_duration_seconds,
                 average_view_percentage=item.average_view_percentage,
-                duration_seconds=item.duration_seconds,
                 views=item.views,
                 subscribers_gained=item.subscribers_gained,
                 subscribers_lost=item.subscribers_lost,
                 net_subscribers=item.net_subscribers,
             )
-            for item in page
+            for item in items
         ],
     )

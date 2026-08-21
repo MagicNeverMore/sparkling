@@ -27,11 +27,11 @@ from ..services.settings.settings_snapshot import (
 )
 from ..services.trend.collector import collect_trends, maybe_enqueue_due_trend_run
 from ..services.social_media.collector import (
+    SOCIAL_MEDIA_RUN_TIMEOUT_SECONDS,
     collect_social_media,
     maybe_enqueue_due_social_media_task,
     start_social_media_run,
 )
-from ..services.social_media.youtube import YouTubeReportsNotReadyError
 from ..services.trend.cleanup import purge_expired_deleted_trends, soft_delete_stale_unfavorited_trends
 from ..services.ws_manager import manager
 
@@ -53,7 +53,7 @@ TASK_TIMEOUT_SECONDS = {
     "embed": 180,
     "link_discover": 60,
     "trend_collect": 1800,
-    "social_media_collect": 600,
+    "social_media_collect": SOCIAL_MEDIA_RUN_TIMEOUT_SECONDS,
 }
 TASK_LEASE_GRACE_SECONDS = 60
 SETTINGS_NOT_READY_RETRY_SECONDS = 30
@@ -350,15 +350,6 @@ async def _run_claimed_task(task: _ClaimedTask) -> None:
     except cancelled_exc:
         _mark_task_released(task, "worker cancelled")
         raise
-    except YouTubeReportsNotReadyError as exc:
-        logger.warning(
-            "social_media_collect 本次同步失败：YouTube 日报尚未就绪 task_id=%s "
-            "activity_reports=%s reach_reports=%s",
-            task.id,
-            exc.basic_count,
-            exc.reach_count,
-        )
-        _mark_task_failed(task, exc)
     except Exception as exc:
         logger.exception("任务 %s 执行失败: %s", task.id, exc)
         _mark_task_failed(task, exc)

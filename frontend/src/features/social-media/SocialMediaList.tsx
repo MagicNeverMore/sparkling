@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useState } from 'react'
-import { ExternalLink, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, RefreshCw } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, ApiError } from '../../lib/api'
 import { useI18n } from '../../lib/I18nProvider'
 import { useToast } from '../../components/useToast'
-import type { SocialMediaListResponse, SocialMediaRun, SocialMediaSyncRequest } from './types'
+import type {
+  SocialMediaListResponse,
+  SocialMediaMetricListResponse,
+  SocialMediaRun,
+  SocialMediaSyncRequest,
+  SocialMediaVideo,
+  SocialMediaVideoListResponse,
+} from './types'
 
 const formatDuration = (seconds: number | null) => {
   if (seconds === null) return '—'
@@ -19,10 +26,56 @@ const formatDuration = (seconds: number | null) => {
 
 const formatPercent = (value: number | null) => value === null ? '—' : `${value.toFixed(2)}%`
 const formatNet = (value: number) => value > 0 ? `+${value.toLocaleString()}` : value.toLocaleString()
-const fetchPageData = () => Promise.all([
-  api.get<SocialMediaListResponse>('/api/social-media/videos'),
-  api.get<SocialMediaRun | null>('/api/social-media/runs/latest'),
-])
+const fetchAllVideos = async (): Promise<SocialMediaVideoListResponse> => {
+  const limit = 200
+  const first = await api.get<SocialMediaVideoListResponse>(`/api/social-media/videos?limit=${limit}`)
+  const items = [...first.items]
+  for (let offset = items.length; offset < first.total; offset += limit) {
+    const page = await api.get<SocialMediaVideoListResponse>(`/api/social-media/videos?limit=${limit}&offset=${offset}`)
+    items.push(...page.items)
+  }
+  return { total: first.total, items }
+}
+
+const fetchPageData = async (): Promise<[SocialMediaListResponse, SocialMediaRun | null]> => {
+  const [videos, metrics, latestRun] = await Promise.all([
+    fetchAllVideos(),
+    api.get<SocialMediaMetricListResponse>('/api/social-media/video-metrics'),
+    api.get<SocialMediaRun | null>('/api/social-media/runs/latest'),
+  ])
+  const metricByVideoId = new Map(metrics.items.map((item) => [item.video_id, item]))
+  return [{
+    data_date: metrics.data_date,
+    updated_at: metrics.updated_at,
+    total: videos.total,
+    items: videos.items.map((video) => {
+      const metric = metricByVideoId.get(video.id)
+      return {
+        ...video,
+        ctr: metric?.ctr ?? null,
+        average_view_duration_seconds: metric?.average_view_duration_seconds ?? null,
+        average_view_percentage: metric?.average_view_percentage ?? null,
+        views: metric?.views ?? 0,
+        subscribers_gained: metric?.subscribers_gained ?? 0,
+        subscribers_lost: metric?.subscribers_lost ?? 0,
+        net_subscribers: metric?.net_subscribers ?? 0,
+      }
+    }),
+  }, latestRun]
+}
+
+type SortKey = keyof Pick<SocialMediaVideo,
+  'title' | 'published_at' | 'platform' | 'ctr' | 'average_view_duration_seconds'
+  | 'average_view_percentage' | 'duration_seconds' | 'views' | 'net_subscribers'
+>
+type SortDirection = 'asc' | 'desc'
+
+const compareValues = (left: string | number | null, right: string | number | null) => {
+  if (left === null) return right === null ? 0 : 1
+  if (right === null) return -1
+  if (typeof left === 'number' && typeof right === 'number') return left - right
+  return String(left).localeCompare(String(right))
+}
 
 export default function SocialMediaList() {
   const { t } = useI18n()
@@ -30,7 +83,34 @@ export default function SocialMediaList() {
   const [data, setData] = useState<SocialMediaListResponse | null>(null)
   const [run, setRun] = useState<SocialMediaRun | null>(null)
   const [loading, setLoading] = useState(true)
+  const [platformFilter, setPlatformFilter] = useState('')
+  const [sortKey, setSortKey] = useState<SortKey>('published_at')
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const syncing = run?.status === 'running'
+
+  const platforms = useMemo(
+    () => Array.from(new Set(data?.items.map((item) => item.platform) ?? [])).sort((a, b) => a.localeCompare(b)),
+    [data?.items],
+  )
+  const visibleItems = useMemo(() => {
+    const filtered = data?.items.filter((item) => !platformFilter || item.platform === platformFilter) ?? []
+    return filtered
+      .map((item, index) => ({ item, index }))
+      .sort((left, right) => {
+        const result = compareValues(left.item[sortKey], right.item[sortKey])
+        return result === 0 ? left.index - right.index : sortDirection === 'asc' ? result : -result
+      })
+      .map(({ item }) => item)
+  }, [data?.items, platformFilter, sortDirection, sortKey])
+
+  const toggleSort = (nextKey: SortKey) => {
+    if (nextKey === sortKey) {
+      setSortDirection((current) => current === 'asc' ? 'desc' : 'asc')
+      return
+    }
+    setSortKey(nextKey)
+    setSortDirection('desc')
+  }
 
   const load = useCallback(async () => {
     try {
@@ -83,14 +163,29 @@ export default function SocialMediaList() {
     ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
     : '—'
 
+  const sortIcon = (key: SortKey) => {
+    if (sortKey !== key) return <ArrowUpDown size={14} aria-hidden="true" />
+    return sortDirection === 'asc'
+      ? <ArrowUp size={14} aria-hidden="true" />
+      : <ArrowDown size={14} aria-hidden="true" />
+  }
+
+  const sortableHeader = (label: string, key: SortKey, align = 'left') => (
+    <th className={`px-4 py-3 ${align === 'right' ? 'text-right' : ''}`} aria-sort={sortKey === key ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" onClick={() => toggleSort(key)} className={`inline-flex items-center gap-1 font-medium transition hover:text-slate-900 dark:hover:text-slate-100 ${align === 'right' ? 'justify-end' : ''}`}>
+        {label}{sortIcon(key)}
+      </button>
+    </th>
+  )
+
   return (
     <div className="mx-auto max-w-[1500px] space-y-5 px-4 py-6 md:px-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-slate-950 dark:text-slate-100">{t('socialMedia.title')}</h1>
           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
-            <span>{t('socialMedia.metricDate')}: {data?.metric_date ?? '—'}</span>
-            <span>{t('socialMedia.updatedAt')}: {localDateTime(data?.collected_at ?? null)}</span>
+            <span>{t('socialMedia.metricDate')}: {data?.data_date ?? '—'}</span>
+            <span>{t('socialMedia.updatedAt')}: {localDateTime(data?.updated_at ?? null)}</span>
           </div>
         </div>
         <button type="button" onClick={() => void syncNow()} disabled={syncing} className="flex items-center gap-2 rounded-md bg-violet-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-800">
@@ -114,47 +209,73 @@ export default function SocialMediaList() {
             <Link to="/settings?section=social-media" className="mt-3 inline-block text-sm text-violet-500 hover:text-violet-400">{t('socialMedia.openSettings')}</Link>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-[1260px] w-full text-left text-sm">
+          <>
+            <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+              <label className="flex w-full max-w-[220px] items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                <span>{t('socialMedia.platformFilter')}</span>
+                <select value={platformFilter} onChange={(event) => setPlatformFilter(event.target.value)} className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none focus:border-violet-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+                  <option value="">{t('socialMedia.allPlatforms')}</option>
+                  {platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[1400px] table-fixed text-left text-sm">
+              <colgroup>
+                <col className="w-[320px]" />
+                <col className="w-[180px]" />
+                <col className="w-[100px]" />
+                <col className="w-[80px]" />
+                <col className="w-[90px]" />
+                <col className="w-[80px]" />
+                <col className="w-[90px]" />
+                <col className="w-[100px]" />
+                <col className="w-[120px]" />
+                <col className="w-[120px]" />
+                <col className="w-[180px]" />
+              </colgroup>
               <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
                 <tr>
-                  <th className="px-4 py-3">{t('socialMedia.videoName')}</th>
-                  <th className="px-4 py-3">{t('socialMedia.publishedAt')}</th>
-                  <th className="px-4 py-3">{t('socialMedia.platform')}</th>
-                  <th className="px-4 py-3 text-right">CTR</th>
-                  <th className="px-4 py-3 text-right">AVD</th>
-                  <th className="px-4 py-3 text-right">AVP</th>
-                  <th className="px-4 py-3 text-right">{t('socialMedia.duration')}</th>
-                  <th className="px-4 py-3 text-right">{t('socialMedia.views')}</th>
-                  <th className="px-4 py-3 text-right">{t('socialMedia.subscriberGrowth')}</th>
+                  {sortableHeader(t('socialMedia.videoName'), 'title')}
+                  {sortableHeader(t('socialMedia.publishedAt'), 'published_at')}
+                  {sortableHeader(t('socialMedia.platform'), 'platform')}
+                  {sortableHeader('CTR', 'ctr', 'right')}
+                  {sortableHeader('AVD', 'average_view_duration_seconds', 'right')}
+                  {sortableHeader('AVP', 'average_view_percentage', 'right')}
+                  {sortableHeader(t('socialMedia.duration'), 'duration_seconds', 'right')}
+                  {sortableHeader(t('socialMedia.views'), 'views', 'right')}
+                  {sortableHeader(t('socialMedia.subscriberGrowth'), 'net_subscribers', 'right')}
+                  <th className="px-4 py-3">{t('socialMedia.metricDate')}</th>
                   <th className="px-4 py-3">{t('socialMedia.updatedAt')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {data.items.map((video) => (
+                {visibleItems.map((video) => (
                   <tr key={video.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-950/40">
-                    <td className="max-w-sm px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
-                      <a href={`https://www.youtube.com/watch?v=${video.external_video_id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 hover:text-violet-500">
-                        <span className="truncate">{video.title}</span><ExternalLink size={13} className="shrink-0" />
+                    <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
+                      <a href={`https://www.youtube.com/watch?v=${video.external_video_id}`} target="_blank" rel="noreferrer" title={video.title} className="flex min-w-0 items-center gap-1.5 hover:text-violet-500">
+                        <span className="min-w-0 flex-1 truncate">{video.title}</span><ExternalLink size={13} className="shrink-0" />
                       </a>
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-500">{localDateTime(video.published_at)}</td>
-                    <td className="px-4 py-3 text-slate-500">{video.platform}</td>
+                    <td className="px-4 py-3"><span className="inline-flex rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-950/50 dark:text-red-300">{video.platform}</span></td>
                     <td className="px-4 py-3 text-right tabular-nums">{formatPercent(video.ctr)}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{formatDuration(video.average_view_duration_seconds)}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{formatPercent(video.average_view_percentage)}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{formatDuration(video.duration_seconds)}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{video.views.toLocaleString()}</td>
                     <td className="px-4 py-3 text-right tabular-nums" title={`${t('socialMedia.gained')} ${video.subscribers_gained} / ${t('socialMedia.lost')} ${video.subscribers_lost}`}>{formatNet(video.net_subscribers)}</td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-500">{localDateTime(data.collected_at)}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-500">{data.data_date}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-500">{localDateTime(data.updated_at)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         )}
       </div>
-      {data && data.total > 0 && <div className="text-sm text-slate-500">{t('socialMedia.total', { count: data.total })}</div>}
+      {data && data.total > 0 && <div className="text-sm text-slate-500">{t('socialMedia.total', { count: visibleItems.length })}</div>}
     </div>
   )
 }

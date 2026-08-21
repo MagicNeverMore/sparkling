@@ -1,4 +1,4 @@
-"""Social Media 日级采集调度与完整数据集原子发布。"""
+"""Social Media 小时采集调度与完整数据集原子发布。"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session
 from ...db import SessionLocal
 from ...logger import get_logger
 from ...models import (
-    SocialMediaDataset,
     SocialMediaSyncRun,
-    SocialMediaVideoSnapshot,
+    SocialMediaVideo,
+    SocialMediaVideoMetric,
     TaskQueue,
 )
 from ...time_utils import utc_isoformat
@@ -20,6 +20,10 @@ from .config import load_social_media_config, update_social_media_config
 from .youtube import fetch_daily_dataset
 
 logger = get_logger(__name__)
+
+# 社交媒体同步只涉及有限数量的 API 请求；超过该时长可明确判定异常，
+# 绝不能让 UI 长期保留“同步中”。
+SOCIAL_MEDIA_RUN_TIMEOUT_SECONDS = 180
 
 
 def _get_or_recover_sync_run(
@@ -172,8 +176,13 @@ def maybe_enqueue_due_social_media_task(
             calculate_next_run_at(config.update_frequency, config.schedule_time, config.timezone, now)
         )
     )
-    logger.info("social_media.schedule.due enqueue_at=%s", utc_isoformat(now))
-    return enqueue_social_media_task(session, "scheduled")
+    task = enqueue_social_media_task(session, "scheduled")
+    logger.info(
+        "social_media.schedule.hourly_enqueued task_id=%s scheduled_at=%s",
+        task.id,
+        utc_isoformat(now),
+    )
+    return task
 
 
 def calculate_next_run_at(
@@ -182,7 +191,7 @@ def calculate_next_run_at(
     timezone_name: str,
     now: datetime | None = None,
 ) -> datetime:
-    """计算下一次 report 查询时间；指标仍按 YouTube metric_date 日级保存。"""
+    """计算下一次小时快照查询时间。"""
     now = now or datetime.utcnow()
     if frequency != "hourly":
         logger.warning(
@@ -197,70 +206,84 @@ async def collect_social_media(run_id: str) -> dict[str, int | str]:
     config = load_social_media_config()
     dataset = await fetch_daily_dataset(config)
     collected_at = datetime.utcnow()
+    daily_metrics = dataset.daily_metrics()
+    if not daily_metrics:
+        raise ValueError("YouTube 在最近十天内没有可写入的视频分析数据")
     logger.info(
-        "social_media.sync.dataset_ready run_id=%s channel_id=%s metric_date=%s videos=%s",
+        "social_media.sync.dataset_ready run_id=%s channel_id=%s latest_data_date=%s videos=%s data_dates=%s",
         run_id,
         dataset.channel_id,
         dataset.metric_date,
         len(dataset.videos),
+        sorted(daily_metrics),
     )
 
     with SessionLocal() as session:
-        # (platform, account, metric_date) 唯一；同日重跑整批替换，不产生重复指标行。
-        stored = (
-            session.query(SocialMediaDataset)
-            .filter(SocialMediaDataset.platform == "youtube")
-            .filter(SocialMediaDataset.external_account_id == dataset.channel_id)
-            .filter(SocialMediaDataset.metric_date == dataset.metric_date)
-            .one_or_none()
-        )
-        if stored is None:
-            publish_mode = "insert"
-            stored = SocialMediaDataset(
-                platform="youtube",
-                external_account_id=dataset.channel_id,
-                metric_date=dataset.metric_date,
-                status="complete",
-                collected_at=collected_at,
-            )
-            session.add(stored)
-            session.flush()
-        else:
-            publish_mode = "replace"
-            replaced_count = session.query(SocialMediaVideoSnapshot).filter(
-                SocialMediaVideoSnapshot.dataset_id == stored.id
-            ).delete(synchronize_session=False)
-            stored.status = "complete"
-            stored.collected_at = collected_at
-            stored.updated_at = collected_at
-            logger.info(
-                "social_media.sync.same_day_replace run_id=%s dataset_id=%s metric_date=%s removed_snapshots=%s",
-                run_id,
-                stored.id,
-                dataset.metric_date,
-                replaced_count,
-            )
-
+        videos_by_external_id: dict[str, SocialMediaVideo] = {}
+        base_modes: list[str] = []
         for video in dataset.videos:
-            metrics = dataset.metrics_by_video[video.video_id]
-            session.add(
-                SocialMediaVideoSnapshot(
-                    dataset_id=stored.id,
+            stored_video = (
+                session.query(SocialMediaVideo)
+                .filter_by(platform="youtube", external_video_id=video.video_id)
+                .one_or_none()
+            )
+            if stored_video is None:
+                stored_video = SocialMediaVideo(
+                    platform="youtube",
+                    external_account_id=dataset.channel_id,
                     external_video_id=video.video_id,
                     title=video.title,
                     published_at=video.published_at,
                     duration_seconds=video.duration_seconds,
-                    views=metrics.views,
-                    ctr=metrics.ctr,
+                )
+                session.add(stored_video)
+                session.flush()
+                base_modes.append("insert")
+            else:
+                stored_video.external_account_id = dataset.channel_id
+                stored_video.title = video.title
+                stored_video.published_at = video.published_at
+                stored_video.duration_seconds = video.duration_seconds
+                stored_video.updated_at = collected_at
+                base_modes.append("upsert")
+            videos_by_external_id[video.video_id] = stored_video
+
+        published: list[tuple[str, int, int]] = []
+        for data_date, metrics_by_video in daily_metrics.items():
+            inserted = 0
+            updated = 0
+            for external_video_id, metrics in metrics_by_video.items():
+                video = videos_by_external_id[external_video_id]
+                stored_metric = (
+                    session.query(SocialMediaVideoMetric)
+                    .filter_by(video_id=video.id, data_date=data_date)
+                    .one_or_none()
+                )
+                values = dict(
+                    views=metrics.views, ctr=metrics.ctr,
                     average_view_duration_seconds=metrics.average_view_duration_seconds,
                     average_view_percentage=metrics.average_view_percentage,
                     subscribers_gained=metrics.subscribers_gained,
                     subscribers_lost=metrics.subscribers_lost,
                     net_subscribers=metrics.subscribers_gained - metrics.subscribers_lost,
                 )
-            )
+                if stored_metric is None:
+                    session.add(SocialMediaVideoMetric(
+                        video_id=video.id, data_date=data_date, **values
+                    ))
+                    inserted += 1
+                else:
+                    for field, value in values.items():
+                        setattr(stored_metric, field, value)
+                    stored_metric.updated_at = collected_at
+                    updated += 1
+            published.append((data_date, inserted, updated))
 
         run = _get_or_recover_sync_run(session, run_id, phase="publish")
+        if run.status != "running":
+            # API 调用在线程中执行；即使超时后线程晚到，也不得把已失败的 run
+            # 覆盖回 done，更不能发布过期结果。
+            raise RuntimeError(f"Social Media sync run 已终结，拒绝发布结果: {run.status}")
         run.external_account_id = dataset.channel_id
         run.metric_date = dataset.metric_date
         run.video_count = len(dataset.videos)
@@ -269,11 +292,8 @@ async def collect_social_media(run_id: str) -> dict[str, int | str]:
         run.updated_at = collected_at
         session.commit()
         logger.info(
-            "social_media.sync.published run_id=%s dataset_id=%s mode=%s metric_date=%s videos=%s",
-            run_id,
-            stored.id,
-            publish_mode,
-            dataset.metric_date,
+            "social_media.sync.persisted run_id=%s base_videos=%s data_dates=%s latest_data_date=%s videos=%s",
+            run_id, {mode: base_modes.count(mode) for mode in set(base_modes)}, published, dataset.metric_date,
             len(dataset.videos),
         )
 
@@ -289,7 +309,10 @@ async def collect_social_media(run_id: str) -> dict[str, int | str]:
         len(dataset.videos),
         utc_isoformat(collected_at),
     )
-    return {"metric_date": dataset.metric_date, "video_count": len(dataset.videos)}
+    return {
+        "metric_date": dataset.metric_date,
+        "video_count": len(dataset.videos),
+    }
 
 
 def _parse_utc(value: str | None) -> datetime | None:

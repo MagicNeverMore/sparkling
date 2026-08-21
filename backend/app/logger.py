@@ -72,6 +72,18 @@ class _SensitiveDataFilter(logging.Filter):
         return True
 
 
+class _RedactingFormatter(logging.Formatter):
+    """对最终格式化文本再次脱敏，覆盖 exception traceback 与 stack info。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        rendered = redact_log_text(super().format(record))
+        return (
+            rendered
+            if len(rendered) <= 200_000
+            else f"{rendered[:200_000]}... [TRUNCATED BY LOG SIZE LIMIT]"
+        )
+
+
 def _managed_log_files(log_dir: Path) -> list[Path]:
     if not log_dir.exists():
         return []
@@ -152,7 +164,7 @@ def setup_logging() -> None:
     root = logging.getLogger()
     root.setLevel(LOG_LEVEL)
 
-    formatter = logging.Formatter(LOG_FORMAT, DATE_FORMAT)
+    formatter = _RedactingFormatter(LOG_FORMAT, DATE_FORMAT)
 
     # ── 控制台 handler ──
     console = logging.StreamHandler(sys.stdout)

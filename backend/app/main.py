@@ -30,8 +30,11 @@ async def lifespan(_app: FastAPI):
         logger.info("数据库连接成功 (backend=%s)", get_database_backend())
         await start_background_worker()
         logger.info("后台 worker 已启动")
-    except (SQLAlchemyError, Exception) as exc:
-        logger.warning("数据库不可达，HTTP 服务仍将启动：%s", exc)
+    except Exception as exc:
+        logger.exception(
+            "数据库初始化或 migration 失败，HTTP 服务将继续启动但后台 worker 不会启动: %s",
+            exc,
+        )
     try:
         yield
     finally:
@@ -59,7 +62,13 @@ def _database_error_message(exc: Exception) -> str:
 
 
 @app.exception_handler(SQLAlchemyError)
-async def sqlalchemy_exception_handler(_request, exc: SQLAlchemyError) -> JSONResponse:  # noqa: ANN001
+async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError) -> JSONResponse:
+    logger.exception(
+        "数据库请求执行失败 method=%s path=%s error=%s",
+        request.method,
+        request.url.path,
+        exc,
+    )
     return JSONResponse(
         status_code=503,
         content={"message": _database_error_message(exc), "detail": str(exc)},
@@ -67,10 +76,35 @@ async def sqlalchemy_exception_handler(_request, exc: SQLAlchemyError) -> JSONRe
 
 
 @app.exception_handler(DatabaseConnectionError)
-async def database_connection_exception_handler(_request, exc: DatabaseConnectionError) -> JSONResponse:  # noqa: ANN001
+async def database_connection_exception_handler(
+    request: Request,
+    exc: DatabaseConnectionError,
+) -> JSONResponse:
+    logger.exception(
+        "数据库连接异常 method=%s path=%s error=%s",
+        request.method,
+        request.url.path,
+        exc,
+    )
     return JSONResponse(
         status_code=503,
         content={"message": str(exc), "detail": str(exc)},
+    )
+
+
+@app.exception_handler(Exception)
+async def unexpected_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """确保被 FastAPI 转换为响应前，所有未处理异常均进入统一日志。"""
+    logger.exception(
+        "未处理的请求异常 method=%s path=%s error_type=%s error=%s",
+        request.method,
+        request.url.path,
+        type(exc).__name__,
+        exc,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"message": "程序运行发生未处理错误，请检查 Logs", "detail": str(exc)},
     )
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import tempfile
 import unittest
@@ -32,6 +33,41 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
         db, _models, _task_queue, _runner = _app_modules()
         db.Base.metadata.drop_all(bind=db.get_engine())
         db.Base.metadata.create_all(bind=db.get_engine())
+
+    async def test_timed_out_social_media_run_is_reconciled_when_status_is_read(self) -> None:
+        from app.routers import social_media
+
+        db, models, _task_queue, _runner = _app_modules()
+        started_at = datetime.utcnow() - timedelta(
+            seconds=social_media.SOCIAL_MEDIA_RUN_TIMEOUT_SECONDS + 1
+        )
+        with db.SessionLocal() as session:
+            run = models.SocialMediaSyncRun(
+                platform="youtube",
+                trigger="manual",
+                status="running",
+                started_at=started_at,
+            )
+            session.add(run)
+            session.flush()
+            task = models.TaskQueue(
+                task_type="social_media_collect",
+                payload=json.dumps({"run_id": run.id}),
+                status="running",
+                attempts=1,
+                lease_until=datetime.utcnow() + timedelta(minutes=5),
+            )
+            session.add(task)
+            session.commit()
+            run_id, task_id = run.id, task.id
+
+        with db.SessionLocal() as session:
+            social_media._expire_timed_out_social_media_runs(session)
+            run = session.get(models.SocialMediaSyncRun, run_id)
+            task = session.get(models.TaskQueue, task_id)
+            self.assertEqual(run.status, "failed")
+            self.assertIn("任务执行超时", run.error)
+            self.assertEqual(task.status, "failed")
 
     async def test_trend_task_is_not_blocked_by_embedding_settings(self) -> None:
         db, models, _task_queue, runner = _app_modules()
@@ -110,7 +146,7 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
     async def test_social_media_orphan_task_recovers_missing_sync_run(self) -> None:
         db, models, task_queue, runner = _app_modules()
         from app.services.social_media import collector
-        from app.services.social_media.youtube import YouTubeDailyDataset
+        from app.services.social_media.youtube import DailyMetrics, YouTubeDailyDataset, YouTubeVideo
 
         run_id = "missing-social-media-run"
         with db.SessionLocal() as session:
@@ -128,12 +164,18 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
             schedule_time="09:00",
             timezone="UTC",
         )
+        video = YouTubeVideo(
+            video_id="recovered-video",
+            title="Recovered video",
+            published_at=datetime(2026, 8, 19),
+            duration_seconds=60,
+        )
         dataset = YouTubeDailyDataset(
             channel_id="UC-recovered",
             channel_title="Recovered channel",
             metric_date="2026-08-19",
-            videos=[],
-            metrics_by_video={},
+            videos=[video],
+            metrics_by_video={video.video_id: DailyMetrics(1, None, 30.0, 50.0, 0, 0)},
         )
         with (
             patch.object(collector, "load_social_media_config", return_value=config),
@@ -154,6 +196,127 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(task.status, "done")
         self.assertEqual(run.status, "done")
         self.assertEqual(run.external_account_id, "UC-recovered")
+
+    async def test_daily_snapshots_upsert_across_hourly_updates(self) -> None:
+        """同一数据日期始终 upsert，created_at 保留且 updated_at/内容刷新。"""
+        db, models, _task_queue, _runner = _app_modules()
+        from app.services.social_media import collector
+        from app.services.social_media.youtube import DailyMetrics, YouTubeDailyDataset, YouTubeVideo
+
+        video = YouTubeVideo(
+            video_id="video-1",
+            title="Public video",
+            published_at=datetime(2026, 8, 19),
+            duration_seconds=60,
+        )
+        datasets = [
+            YouTubeDailyDataset(
+                channel_id="UC-hourly",
+                channel_title="Hourly Channel",
+                metric_date="2026-08-19",
+                videos=[video],
+                metrics_by_video={
+                    video.video_id: DailyMetrics(10, 2.5, 30.0, 50.0, 1, 0)
+                },
+            ),
+            YouTubeDailyDataset(
+                channel_id="UC-hourly",
+                channel_title="Hourly Channel",
+                metric_date="2026-08-19",
+                videos=[video],
+                metrics_by_video={
+                    video.video_id: DailyMetrics(20, 3.0, 35.0, 55.0, 2, 0)
+                },
+            ),
+            YouTubeDailyDataset(
+                channel_id="UC-hourly",
+                channel_title="Hourly Channel",
+                metric_date="2026-08-19",
+                videos=[video],
+                metrics_by_video={
+                    video.video_id: DailyMetrics(30, 3.5, 40.0, 60.0, 3, 1)
+                },
+            ),
+        ]
+        moments = iter(
+            [
+                datetime(2026, 8, 20, 10, 5),
+                datetime(2026, 8, 20, 10, 45),
+                datetime(2026, 8, 20, 11, 5),
+            ]
+        )
+
+        class FixedDatetime:
+            @staticmethod
+            def utcnow() -> datetime:
+                return next(moments)
+
+        config = SimpleNamespace()
+        with (
+            patch.object(collector, "load_social_media_config", return_value=config),
+            patch.object(collector, "update_social_media_config"),
+            patch.object(collector, "fetch_daily_dataset", new=AsyncMock(side_effect=datasets)),
+            patch.object(collector, "datetime", FixedDatetime),
+            self.assertLogs("app.services.social_media.collector", level="INFO") as captured,
+        ):
+            await collector.collect_social_media("hourly-run-1")
+            await collector.collect_social_media("hourly-run-2")
+            await collector.collect_social_media("hourly-run-3")
+
+        with db.SessionLocal() as session:
+            stored = (
+                session.query(models.SocialMediaVideoMetric)
+                .order_by(models.SocialMediaVideoMetric.data_date)
+                .all()
+            )
+            videos = session.query(models.SocialMediaVideo).all()
+
+        self.assertEqual([item.data_date for item in stored], ["2026-08-19"])
+        self.assertEqual(len(videos), 1)
+        self.assertEqual(stored[0].views, 30)
+        self.assertEqual(stored[0].updated_at, datetime(2026, 8, 20, 11, 5))
+        messages = "\n".join(captured.output)
+        self.assertIn("('2026-08-19', 0, 1)", messages)
+        self.assertEqual(messages.count("social_media.sync.persisted"), 3)
+
+    def test_video_and_latest_metric_apis_are_separate_and_filterable(self) -> None:
+        db, models, _task_queue, _runner = _app_modules()
+        from app.routers import social_media
+
+        with db.SessionLocal() as session:
+            video = models.SocialMediaVideo(
+                platform="youtube",
+                external_account_id="UC-api",
+                external_video_id="video-api",
+                title="A searchable video",
+                published_at=datetime(2026, 8, 18),
+                duration_seconds=90,
+            )
+            session.add(video)
+            session.flush()
+            session.add(models.SocialMediaVideoMetric(
+                video_id=video.id,
+                data_date="2026-08-18",
+                views=42,
+                ctr=3.5,
+                subscribers_gained=2,
+                subscribers_lost=1,
+                net_subscribers=1,
+            ))
+            session.commit()
+
+        app = FastAPI()
+        app.include_router(social_media.router, prefix="/api/social-media")
+        with TestClient(app) as client:
+            videos = client.get("/api/social-media/videos", params={"title": "searchable"})
+            metrics = client.get("/api/social-media/video-metrics")
+
+        self.assertEqual(videos.status_code, 200)
+        self.assertEqual(videos.json()["items"][0]["external_video_id"], "video-api")
+        self.assertNotIn("views", videos.json()["items"][0])
+        self.assertEqual(metrics.status_code, 200)
+        self.assertEqual(metrics.json()["data_date"], "2026-08-18")
+        self.assertEqual(metrics.json()["items"][0]["views"], 42)
 
     def test_manual_social_media_request_queues_without_creating_run(self) -> None:
         db, models, _task_queue, _runner = _app_modules()
@@ -336,26 +499,20 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
             completed = session.query(models.SocialMediaSyncRun).one()
             self.assertEqual(completed.status, "done")
 
-    async def test_reports_not_ready_ends_scheduled_run_without_retrying_same_task(self) -> None:
+    async def test_analytics_api_failure_ends_scheduled_run_without_retrying_same_task(self) -> None:
         db, models, _task_queue, runner = _app_modules()
         from app.services.social_media import collector
-        from app.services.social_media.youtube import YouTubeReportsNotReadyError
 
         with db.SessionLocal() as session:
             task = collector.enqueue_social_media_task(session, "scheduled")
             task_id = task.id
 
         config = SimpleNamespace()
-        error = YouTubeReportsNotReadyError(
-            basic_count=1,
-            reach_count=0,
-            basic_dates=["2026-08-19"],
-            reach_dates=[],
-        )
+        error = ValueError("YouTube Analytics API 请求失败: 403 quotaExceeded")
         with (
             patch.object(collector, "load_social_media_config", return_value=config),
             patch.object(collector, "fetch_daily_dataset", new=AsyncMock(side_effect=error)),
-            self.assertLogs("app.workers.runner", level="WARNING") as captured,
+            self.assertLogs("app.workers.runner", level="ERROR") as captured,
         ):
             await runner._drain_pending_tasks_once(worker_id="test-worker")
 
@@ -370,7 +527,7 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed_run.status, "failed")
         self.assertIsNotNone(failed_run.finished_at)
         messages = "\n".join(captured.output)
-        self.assertIn("本次同步失败", messages)
+        self.assertIn("执行失败", messages)
         self.assertNotIn("retry_after_seconds", messages)
 
         next_hour_config = SimpleNamespace(
