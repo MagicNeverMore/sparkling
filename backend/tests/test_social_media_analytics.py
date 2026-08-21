@@ -255,7 +255,7 @@ class SocialMediaAnalyticsTest(unittest.TestCase):
         self.assertNotIn("temporary-access-token", messages)
 
     def test_callback_never_reports_connected_when_persistence_is_not_visible(self) -> None:
-        from app.routers import social_media
+        from app.routers.social_media import analytics as social_media
         from app.services.social_media.config import SocialMediaConfig
 
         disconnected = SocialMediaConfig(
@@ -306,7 +306,7 @@ class SocialMediaAnalyticsTest(unittest.TestCase):
         self.assertIn("youtube=error", response.headers["location"])
 
     def test_callback_persists_connection_before_reporting_connected_and_logs_trace(self) -> None:
-        from app.routers import social_media
+        from app.routers.social_media import analytics as social_media
         from app.services.settings import runtime_config
         from app.services.social_media.config import (
             load_social_media_config,
@@ -345,7 +345,7 @@ class SocialMediaAnalyticsTest(unittest.TestCase):
                             return_value=("refresh-token", "UC123", "Example Channel")
                         ),
                     ),
-                    self.assertLogs("app.routers.social_media", level="INFO") as captured,
+                    self.assertLogs("app.routers.social_media.analytics", level="INFO") as captured,
                 ):
                     response = asyncio.run(
                         social_media.youtube_oauth_callback(
@@ -388,7 +388,7 @@ class SocialMediaAnalyticsTest(unittest.TestCase):
             normalize_public_origin("http://sparkling.nimbus2000.site:8443")
 
     def test_oauth_redirect_uses_runtime_public_origin(self) -> None:
-        from app.routers import social_media
+        from app.routers.social_media import analytics as social_media
 
         app = FastAPI()
         app.include_router(social_media.router, prefix="/api/social-media")
@@ -417,7 +417,7 @@ class SocialMediaAnalyticsTest(unittest.TestCase):
         )
 
     def test_oauth_redirect_requires_runtime_origin_in_production(self) -> None:
-        from app.routers import social_media
+        from app.routers.social_media import analytics as social_media
 
         app = FastAPI()
         app.include_router(social_media.router, prefix="/api/social-media")

@@ -18,7 +18,10 @@ export const navItems: readonly NavItem[] = [
   {
     labelKey: 'nav.socialMedia',
     icon: 'BarChart3',
-    children: [{ to: '/social-media/list', labelKey: 'nav.socialMediaList' }],
+    children: [
+      { to: '/social-media/list', labelKey: 'nav.socialMediaList' },
+      { to: '/social-media/topics', labelKey: 'nav.socialMediaTopics' },
+    ],
   },
   { to: '/tasks', labelKey: 'nav.tasks', icon: 'CheckSquare' },
   { to: '/user', labelKey: 'nav.user', icon: 'User' },

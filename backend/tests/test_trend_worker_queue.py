@@ -35,7 +35,7 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
         db.Base.metadata.create_all(bind=db.get_engine())
 
     async def test_timed_out_social_media_run_is_reconciled_when_status_is_read(self) -> None:
-        from app.routers import social_media
+        from app.routers.social_media import analytics as social_media
 
         db, models, _task_queue, _runner = _app_modules()
         started_at = datetime.utcnow() - timedelta(
@@ -281,7 +281,7 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
 
     def test_video_and_latest_metric_apis_are_separate_and_filterable(self) -> None:
         db, models, _task_queue, _runner = _app_modules()
-        from app.routers import social_media
+        from app.routers.social_media import analytics as social_media
 
         with db.SessionLocal() as session:
             video = models.SocialMediaVideo(
@@ -320,7 +320,7 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
 
     def test_manual_social_media_request_queues_without_creating_run(self) -> None:
         db, models, _task_queue, _runner = _app_modules()
-        from app.routers import social_media
+        from app.routers.social_media import analytics as social_media
 
         app = FastAPI()
         app.include_router(social_media.router, prefix="/api/social-media")
@@ -343,7 +343,7 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
 
     def test_repeated_manual_social_media_requests_reuse_only_manual_task(self) -> None:
         db, models, _task_queue, _runner = _app_modules()
-        from app.routers import social_media
+        from app.routers.social_media import analytics as social_media
 
         app = FastAPI()
         app.include_router(social_media.router, prefix="/api/social-media")

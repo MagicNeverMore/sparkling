@@ -139,6 +139,40 @@ class UserTask(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class ContentTopic(Base):
+    """自媒体内容选题，独立于发布后的社媒视频数据。"""
+
+    __tablename__ = "content_topic"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="not_started", nullable=False)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime)
+    cover_path: Mapped[str | None] = mapped_column(String)
+    task_id: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class ContentTopicPublication(Base):
+    """选题的发布渠道；视频删除时保留渠道记录。"""
+
+    __tablename__ = "content_topic_publication"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    topic_id: Mapped[str] = mapped_column(
+        ForeignKey("content_topic.id", ondelete="CASCADE"), nullable=False
+    )
+    platform: Mapped[str] = mapped_column(String, nullable=False)
+    social_media_video_id: Mapped[str | None] = mapped_column(
+        ForeignKey("social_media_video.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class TrendItem(Base):
     """可作为自媒体内容选题的热点内容。"""
 

@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Task, TaskCreatePayload } from '../../lib/taskStore'
 import { useI18n } from '../../lib/I18nProvider'
+import { api } from '../../lib/api'
 
 interface Props {
   open: boolean
@@ -11,6 +12,11 @@ interface Props {
 
 const CATEGORIES = ['自媒体', 'App 开发', '其他']
 
+interface AvailableTopic {
+  id: string
+  title: string
+}
+
 // 内层组件通过 key 重置，避免 useEffect + setState 的 lint 问题
 function TaskModalInner({ initial, onClose, onSave }: Omit<Props, 'open'>) {
   const { t } = useI18n()
@@ -19,7 +25,14 @@ function TaskModalInner({ initial, onClose, onSave }: Omit<Props, 'open'>) {
   const [category, setCategory] = useState(initial?.category ?? '')
   const [startDate, setStartDate] = useState(initial?.startDate ?? '')
   const [dueDate, setDueDate] = useState(initial?.dueDate ?? '')
+  const [topicId, setTopicId] = useState('')
+  const [topics, setTopics] = useState<AvailableTopic[]>([])
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (initial || category !== '自媒体') return
+    void api.get<AvailableTopic[]>('/api/social-media/topic/available').then(setTopics).catch(() => setTopics([]))
+  }, [category, initial])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -32,6 +45,8 @@ function TaskModalInner({ initial, onClose, onSave }: Omit<Props, 'open'>) {
         category: category.trim() || undefined,
         startDate: startDate || undefined,
         dueDate: dueDate || undefined,
+        topicId: topicId || undefined,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       })
       onClose()
     } finally {
@@ -101,6 +116,17 @@ function TaskModalInner({ initial, onClose, onSave }: Omit<Props, 'open'>) {
               className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-950 placeholder-slate-400 outline-none focus:border-violet-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
             />
           </div>
+
+          {!initial && category === '自媒体' && (
+            <div>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">关联选题（未开始）</label>
+              <select value={topicId} onChange={(e) => setTopicId(e.target.value)} className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 outline-none focus:border-violet-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">
+                <option value="">不关联选题</option>
+                {topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.title}</option>)}
+              </select>
+              {topicId && <p className="mt-1 text-xs text-slate-500">创建后该选题会自动变为「工作中」。</p>}
+            </div>
+          )}
 
           {/* 日期 */}
           <div className="grid grid-cols-2 gap-3">

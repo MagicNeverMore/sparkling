@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 
 from ..db import get_session
 from ..logger import get_logger
-from ..models import UserTask
-from ..time_utils import utc_isoformat
+from ..models import ContentTopic, UserTask
+from ..time_utils import get_timezone, utc_isoformat, utc_naive_to_local
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -23,6 +23,8 @@ class TaskCreate(BaseModel):
     category: Optional[str] = None
     start_date: Optional[str] = None  # 'YYYY-MM-DD'
     due_date: Optional[str] = None   # 'YYYY-MM-DD'
+    topic_id: Optional[str] = None
+    timezone: str = "UTC"
 
 
 class TaskPatch(BaseModel):
@@ -73,14 +75,31 @@ def list_tasks(session: Session = Depends(get_session)) -> list[TaskOut]:
 
 @router.post("", response_model=TaskOut, status_code=201)
 def create_task(body: TaskCreate, session: Session = Depends(get_session)) -> TaskOut:
+    if body.topic_id and body.category != "自媒体":
+        raise HTTPException(status_code=422, detail="只有自媒体任务可以关联选题")
+    topic = session.get(ContentTopic, body.topic_id) if body.topic_id else None
+    if body.topic_id and (topic is None or topic.status != "not_started"):
+        raise HTTPException(status_code=422, detail="只能关联未开始的选题")
+    try:
+        timezone = get_timezone(body.timezone)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    due_date = body.due_date
+    if topic and topic.scheduled_at:
+        due_date = utc_naive_to_local(topic.scheduled_at, timezone.key).date().isoformat()
     task = UserTask(
         title=body.title,
         description=body.description,
         category=body.category,
         start_date=body.start_date,
-        due_date=body.due_date,
+        due_date=due_date,
     )
     session.add(task)
+    session.flush()
+    if topic:
+        topic.status = "working"
+        topic.task_id = task.id
+        topic.updated_at = datetime.utcnow()
     session.commit()
     session.refresh(task)
     logger.info("任务已创建 task_id=%s category=%s due_date=%s", task.id, task.category, task.due_date)
@@ -122,6 +141,10 @@ def delete_task(task_id: str, session: Session = Depends(get_session)) -> None:
     task = session.get(UserTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    linked_topics = session.query(ContentTopic).filter(ContentTopic.task_id == task_id).all()
+    for topic in linked_topics:
+        topic.task_id = None
+        topic.updated_at = datetime.utcnow()
     session.delete(task)
     session.commit()
     logger.info("任务已删除 task_id=%s", task_id)
