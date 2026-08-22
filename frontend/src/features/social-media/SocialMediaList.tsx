@@ -6,6 +6,7 @@ import { useI18n } from '../../lib/I18nProvider'
 import { useToast } from '../../components/useToast'
 import type {
   SocialMediaListResponse,
+  SocialMediaMetricDateListResponse,
   SocialMediaMetricListResponse,
   SocialMediaRun,
   SocialMediaSyncRequest,
@@ -28,40 +29,54 @@ const formatPercent = (value: number | null) => value === null ? '—' : `${valu
 const formatNet = (value: number) => value > 0 ? `+${value.toLocaleString()}` : value.toLocaleString()
 const fetchAllVideos = async (): Promise<SocialMediaVideoListResponse> => {
   const limit = 200
-  const first = await api.get<SocialMediaVideoListResponse>(`/api/social-media/videos?limit=${limit}`)
+  const first = await api.get<SocialMediaVideoListResponse>(`/api/social-media/list/videos?limit=${limit}`)
   const items = [...first.items]
   for (let offset = items.length; offset < first.total; offset += limit) {
-    const page = await api.get<SocialMediaVideoListResponse>(`/api/social-media/videos?limit=${limit}&offset=${offset}`)
+    const page = await api.get<SocialMediaVideoListResponse>(`/api/social-media/list/videos?limit=${limit}&offset=${offset}`)
     items.push(...page.items)
   }
   return { total: first.total, items }
 }
 
-const fetchPageData = async (): Promise<[SocialMediaListResponse, SocialMediaRun | null]> => {
-  const [videos, metrics, latestRun] = await Promise.all([
+type PageData = {
+  list: SocialMediaListResponse
+  metricDates: string[]
+  run: SocialMediaRun | null
+}
+
+const fetchPageData = async (dataDate?: string): Promise<PageData> => {
+  const metricUrl = dataDate
+    ? `/api/social-media/list/video-metrics?data_date=${encodeURIComponent(dataDate)}`
+    : '/api/social-media/list/video-metrics'
+  const [videos, metrics, metricDates, latestRun] = await Promise.all([
     fetchAllVideos(),
-    api.get<SocialMediaMetricListResponse>('/api/social-media/video-metrics'),
-    api.get<SocialMediaRun | null>('/api/social-media/runs/latest'),
+    api.get<SocialMediaMetricListResponse>(metricUrl),
+    api.get<SocialMediaMetricDateListResponse>('/api/social-media/list/video-metric-dates'),
+    api.get<SocialMediaRun | null>('/api/social-media/list/runs/latest'),
   ])
   const metricByVideoId = new Map(metrics.items.map((item) => [item.video_id, item]))
-  return [{
-    data_date: metrics.data_date,
-    updated_at: metrics.updated_at,
-    total: videos.total,
-    items: videos.items.map((video) => {
-      const metric = metricByVideoId.get(video.id)
-      return {
-        ...video,
-        ctr: metric?.ctr ?? null,
-        average_view_duration_seconds: metric?.average_view_duration_seconds ?? null,
-        average_view_percentage: metric?.average_view_percentage ?? null,
-        views: metric?.views ?? 0,
-        subscribers_gained: metric?.subscribers_gained ?? 0,
-        subscribers_lost: metric?.subscribers_lost ?? 0,
-        net_subscribers: metric?.net_subscribers ?? 0,
-      }
-    }),
-  }, latestRun]
+  return {
+    list: {
+      data_date: metrics.data_date,
+      updated_at: metrics.updated_at,
+      total: videos.total,
+      items: videos.items.map((video) => {
+        const metric = metricByVideoId.get(video.id)
+        return {
+          ...video,
+          ctr: metric?.ctr ?? null,
+          average_view_duration_seconds: metric?.average_view_duration_seconds ?? null,
+          average_view_percentage: metric?.average_view_percentage ?? null,
+          views: metric?.views ?? 0,
+          subscribers_gained: metric?.subscribers_gained ?? 0,
+          subscribers_lost: metric?.subscribers_lost ?? 0,
+          net_subscribers: metric?.net_subscribers ?? 0,
+        }
+      }),
+    },
+    metricDates: metricDates.items,
+    run: latestRun,
+  }
 }
 
 type SortKey = keyof Pick<SocialMediaVideo,
@@ -84,6 +99,8 @@ export default function SocialMediaList() {
   const [run, setRun] = useState<SocialMediaRun | null>(null)
   const [loading, setLoading] = useState(true)
   const [platformFilter, setPlatformFilter] = useState('')
+  const [selectedDataDate, setSelectedDataDate] = useState<string | null>(null)
+  const [metricDates, setMetricDates] = useState<string[]>([])
   const [sortKey, setSortKey] = useState<SortKey>('published_at')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const syncing = run?.status === 'running'
@@ -102,6 +119,14 @@ export default function SocialMediaList() {
       })
       .map(({ item }) => item)
   }, [data?.items, platformFilter, sortDirection, sortKey])
+  const statistics = useMemo(() => visibleItems.reduce(
+    (total, item) => ({
+      videoCount: total.videoCount + 1,
+      views: total.views + item.views,
+      netSubscribers: total.netSubscribers + item.net_subscribers,
+    }),
+    { videoCount: 0, views: 0, netSubscribers: 0 },
+  ), [visibleItems])
 
   const toggleSort = (nextKey: SortKey) => {
     if (nextKey === sortKey) {
@@ -114,24 +139,28 @@ export default function SocialMediaList() {
 
   const load = useCallback(async () => {
     try {
-      const [list, latestRun] = await fetchPageData()
-      setData(list)
-      setRun(latestRun)
+      const page = await fetchPageData(selectedDataDate ?? undefined)
+      setData(page.list)
+      setMetricDates(page.metricDates)
+      setSelectedDataDate((current) => current && page.metricDates.includes(current) ? current : page.list.data_date)
+      setRun(page.run)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       show(t('socialMedia.loadFailed', { message }), 'error')
     } finally {
       setLoading(false)
     }
-  }, [show, t])
+  }, [selectedDataDate, show, t])
 
   useEffect(() => {
     let active = true
-    void fetchPageData()
-      .then(([list, latestRun]) => {
+    void fetchPageData(selectedDataDate ?? undefined)
+      .then((page) => {
         if (!active) return
-        setData(list)
-        setRun(latestRun)
+        setData(page.list)
+        setMetricDates(page.metricDates)
+        setSelectedDataDate((current) => current && page.metricDates.includes(current) ? current : page.list.data_date)
+        setRun(page.run)
       })
       .catch((error) => {
         if (!active) return
@@ -142,7 +171,7 @@ export default function SocialMediaList() {
         if (active) setLoading(false)
       })
     return () => { active = false }
-  }, [show, t])
+  }, [selectedDataDate, show, t])
   useEffect(() => {
     const timer = window.setInterval(() => void load(), 5000)
     return () => window.clearInterval(timer)
@@ -150,7 +179,7 @@ export default function SocialMediaList() {
 
   const syncNow = async () => {
     try {
-      await api.post<SocialMediaSyncRequest>('/api/social-media/sync')
+      await api.post<SocialMediaSyncRequest>('/api/social-media/list/sync')
       show(t('socialMedia.syncStarted'), 'success')
       await load()
     } catch (error) {
@@ -184,7 +213,13 @@ export default function SocialMediaList() {
         <div>
           <h1 className="text-xl font-semibold text-slate-950 dark:text-slate-100">{t('socialMedia.title')}</h1>
           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
-            <span>{t('socialMedia.metricDate')}: {data?.data_date ?? '—'}</span>
+            <label className="flex items-center gap-2">
+              <span>{t('socialMedia.metricDate')}:</span>
+              <select value={selectedDataDate ?? data?.data_date ?? ''} onChange={(event) => setSelectedDataDate(event.target.value || null)} disabled={!metricDates.length} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900 outline-none focus:border-violet-400 disabled:cursor-not-allowed disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:disabled:bg-slate-800">
+                {!data?.data_date && <option value="">—</option>}
+                {metricDates.map((date) => <option key={date} value={date}>{date}</option>)}
+              </select>
+            </label>
             <span>{t('socialMedia.updatedAt')}: {localDateTime(data?.updated_at ?? null)}</span>
           </div>
         </div>
@@ -210,7 +245,7 @@ export default function SocialMediaList() {
           </div>
         ) : (
           <>
-            <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
               <label className="flex w-full max-w-[220px] items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                 <span>{t('socialMedia.platformFilter')}</span>
                 <select value={platformFilter} onChange={(event) => setPlatformFilter(event.target.value)} className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none focus:border-violet-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
@@ -218,6 +253,11 @@ export default function SocialMediaList() {
                   {platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
                 </select>
               </label>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-slate-600 dark:text-slate-300">
+                <span>{t('socialMedia.totalVideos')}: <strong className="tabular-nums text-slate-900 dark:text-slate-100">{statistics.videoCount.toLocaleString()}</strong></span>
+                <span>{t('socialMedia.totalViews')}: <strong className="tabular-nums text-slate-900 dark:text-slate-100">{statistics.views.toLocaleString()}</strong></span>
+                <span>{t('socialMedia.totalSubscriberGrowth')}: <strong className="tabular-nums text-slate-900 dark:text-slate-100">{formatNet(statistics.netSubscribers)}</strong></span>
+              </div>
             </div>
             <div className="overflow-x-auto">
             <table className="w-full min-w-[1400px] table-fixed text-left text-sm">

@@ -303,13 +303,24 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
                 subscribers_lost=1,
                 net_subscribers=1,
             ))
+            session.add(models.SocialMediaVideoMetric(
+                video_id=video.id,
+                data_date="2026-08-17",
+                views=24,
+                ctr=2.5,
+                subscribers_gained=1,
+                subscribers_lost=0,
+                net_subscribers=1,
+            ))
             session.commit()
 
         app = FastAPI()
         app.include_router(social_media.router, prefix="/api/social-media")
         with TestClient(app) as client:
-            videos = client.get("/api/social-media/videos", params={"title": "searchable"})
-            metrics = client.get("/api/social-media/video-metrics")
+            videos = client.get("/api/social-media/list/videos", params={"title": "searchable"})
+            metrics = client.get("/api/social-media/list/video-metrics")
+            selected_metrics = client.get("/api/social-media/list/video-metrics", params={"data_date": "2026-08-17"})
+            metric_dates = client.get("/api/social-media/list/video-metric-dates")
 
         self.assertEqual(videos.status_code, 200)
         self.assertEqual(videos.json()["items"][0]["external_video_id"], "video-api")
@@ -317,6 +328,11 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metrics.status_code, 200)
         self.assertEqual(metrics.json()["data_date"], "2026-08-18")
         self.assertEqual(metrics.json()["items"][0]["views"], 42)
+        self.assertEqual(selected_metrics.status_code, 200)
+        self.assertEqual(selected_metrics.json()["data_date"], "2026-08-17")
+        self.assertEqual(selected_metrics.json()["items"][0]["views"], 24)
+        self.assertEqual(metric_dates.status_code, 200)
+        self.assertEqual(metric_dates.json()["items"], ["2026-08-18", "2026-08-17"])
 
     def test_manual_social_media_request_queues_without_creating_run(self) -> None:
         db, models, _task_queue, _runner = _app_modules()
@@ -330,8 +346,8 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
             patch.object(social_media, "load_social_media_config", return_value=config),
             TestClient(app) as client,
         ):
-            response = client.post("/api/social-media/sync")
-            latest = client.get("/api/social-media/runs/latest")
+            response = client.post("/api/social-media/list/sync")
+            latest = client.get("/api/social-media/list/runs/latest")
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["trigger"], "manual")
@@ -353,8 +369,8 @@ class TrendWorkerQueueTest(unittest.IsolatedAsyncioTestCase):
             patch.object(social_media, "load_social_media_config", return_value=config),
             TestClient(app) as client,
         ):
-            first = client.post("/api/social-media/sync")
-            second = client.post("/api/social-media/sync")
+            first = client.post("/api/social-media/list/sync")
+            second = client.post("/api/social-media/list/sync")
 
         self.assertEqual(first.status_code, 202)
         self.assertEqual(second.status_code, 202)

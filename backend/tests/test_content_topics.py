@@ -26,6 +26,7 @@ class ContentTopicTest(unittest.TestCase):
         topic = create_topic(
             TopicCreate(
                 title="视频选题",
+                series="产品拆解",
                 status="working",
                 scheduled_at=datetime(2026, 8, 21, 16, tzinfo=timezone.utc),
                 timezone="Asia/Shanghai",
@@ -34,6 +35,7 @@ class ContentTopicTest(unittest.TestCase):
         )
         task = self.session.get(UserTask, topic.task_id)
         self.assertIsNotNone(task)
+        self.assertEqual(topic.series, "产品拆解")
         self.assertEqual(task.category, "自媒体")
         self.assertEqual(task.due_date, "2026-08-22")
 

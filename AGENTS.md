@@ -107,6 +107,13 @@ pnpm dev
 3. 前端业务页面和强业务组件优先放入 `frontend/src/features/<module>/`；跨功能复用 UI 才放在 `frontend/src/components/`，跨功能基础设施放在 `frontend/src/lib/`。
 4. 移动文件时必须同步更新所有 import，不保留临时兼容 re-export 层；完成后运行后端 compile/ruff 和前端 tsc/build。
 
+## 二级功能 API 分组约定
+
+1. 一个功能拥有多个二级功能时，二级功能的专属 API 必须使用明确的路径前缀：`/api/<feature>/<sub-feature>/...`，例如 Social Media Analysis 的 List 使用 `/api/social-media/list/...`，选题库使用 `/api/social-media/topic/...`。
+2. 页面仅使用本二级功能的 API 时，列表读取、筛选数据、页面状态和该页面的操作接口均收敛到同一二级功能前缀；不要把它们散落在功能根路径。
+3. 跨二级功能复用的设置、连接、授权等接口保留在功能根路径或对应的 `settings` / `connection` 前缀，并在新增二级功能时避免与其混用。
+4. 重构 API 路径时必须同步更新前端调用、测试、文档和日志断言，不保留旧路径兼容层，除非用户明确要求兼容。
+
 ## 不在 MVP 范围内
 
 - 局域网 mDNS 同步 / 多设备 sync_log（Phase 3）

@@ -31,6 +31,10 @@ export interface SocialMediaMetricListResponse {
   items: SocialMediaVideoMetric[]
 }
 
+export interface SocialMediaMetricDateListResponse {
+  items: string[]
+}
+
 export interface SocialMediaListResponse {
   data_date: string | null
   updated_at: string | null
