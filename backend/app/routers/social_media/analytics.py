@@ -143,6 +143,10 @@ class SocialMediaMetricListOut(BaseModel):
     items: list[SocialMediaVideoMetricOut]
 
 
+class SocialMediaMetricDateListOut(BaseModel):
+    items: list[str]
+
+
 def _masked(value: str | None) -> str | None:
     if not value:
         return None
@@ -361,7 +365,7 @@ def disconnect_youtube_account() -> SocialMediaSettingsOut:
     return _settings_out()
 
 
-@router.post("/sync", response_model=SocialMediaSyncRequestOut, status_code=202)
+@router.post("/list/sync", response_model=SocialMediaSyncRequestOut, status_code=202)
 def run_social_media_sync(session: Session = Depends(get_session)) -> SocialMediaSyncRequestOut:
     config = load_social_media_config()
     if not config.youtube_connected:
@@ -376,7 +380,7 @@ def run_social_media_sync(session: Session = Depends(get_session)) -> SocialMedi
     return SocialMediaSyncRequestOut(task_id=task.id, trigger="manual", status="queued")
 
 
-@router.get("/runs/latest", response_model=Optional[SocialMediaRunOut])
+@router.get("/list/runs/latest", response_model=Optional[SocialMediaRunOut])
 def latest_social_media_run(session: Session = Depends(get_session)) -> Optional[SocialMediaRunOut]:
     _expire_timed_out_social_media_runs(session)
     run = session.query(SocialMediaSyncRun).order_by(SocialMediaSyncRun.created_at.desc()).first()
@@ -425,7 +429,7 @@ def _expire_timed_out_social_media_runs(session: Session) -> None:
     session.commit()
 
 
-@router.get("/videos", response_model=SocialMediaVideoListOut)
+@router.get("/list/videos", response_model=SocialMediaVideoListOut)
 def list_social_media_videos(
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -465,11 +469,12 @@ def list_social_media_videos(
     )
 
 
-@router.get("/video-metrics", response_model=SocialMediaMetricListOut)
-def list_latest_social_media_video_metrics(
+@router.get("/list/video-metrics", response_model=SocialMediaMetricListOut)
+def list_social_media_video_metrics(
+    data_date: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> SocialMediaMetricListOut:
-    data_date = session.query(func.max(SocialMediaVideoMetric.data_date)).scalar()
+    data_date = data_date or session.query(func.max(SocialMediaVideoMetric.data_date)).scalar()
     if data_date is None:
         return SocialMediaMetricListOut(data_date=None, updated_at=None, items=[])
     items = session.query(SocialMediaVideoMetric).filter_by(data_date=data_date).all()
@@ -491,3 +496,17 @@ def list_latest_social_media_video_metrics(
             for item in items
         ],
     )
+
+
+@router.get("/list/video-metric-dates", response_model=SocialMediaMetricDateListOut)
+def list_social_media_video_metric_dates(
+    session: Session = Depends(get_session),
+) -> SocialMediaMetricDateListOut:
+    """返回已有指标日期，供 List 页面只选择已同步数据的日期。"""
+    dates = (
+        session.query(SocialMediaVideoMetric.data_date)
+        .distinct()
+        .order_by(SocialMediaVideoMetric.data_date.desc())
+        .all()
+    )
+    return SocialMediaMetricDateListOut(items=[item[0] for item in dates])

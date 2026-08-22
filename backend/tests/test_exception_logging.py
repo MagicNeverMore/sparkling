@@ -9,7 +9,7 @@ from starlette.requests import Request
 from app import main
 
 
-def _request(path: str = "/api/social-media/sync") -> Request:
+def _request(path: str = "/api/social-media/list/sync") -> Request:
     return Request(
         {
             "type": "http",
@@ -36,7 +36,7 @@ class ExceptionLoggingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 503)
         log_exception.assert_called_once()
-        self.assertEqual(log_exception.call_args.args[1:3], ("POST", "/api/social-media/sync"))
+        self.assertEqual(log_exception.call_args.args[1:3], ("POST", "/api/social-media/list/sync"))
 
     async def test_unexpected_handler_logs_request_and_exception(self) -> None:
         error = RuntimeError("unexpected")

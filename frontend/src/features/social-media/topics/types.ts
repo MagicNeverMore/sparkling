@@ -13,6 +13,7 @@ export interface Topic {
   title: string
   description: string | null
   category: string | null
+  series: string | null
   status: TopicStatus
   scheduled_at: string | null
   published_at: string | null
@@ -27,6 +28,7 @@ export interface Topic {
 export interface TopicListResponse {
   items: Topic[]
   categories: string[]
+  series: string[]
 }
 
 export interface SocialVideo {

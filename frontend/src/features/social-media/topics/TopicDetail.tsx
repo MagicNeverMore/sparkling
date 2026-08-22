@@ -38,6 +38,7 @@ export default function TopicDetail() {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [category, setCategory] = useState('')
+  const [series, setSeries] = useState('')
   const [status, setStatus] = useState<TopicStatus>('not_started')
   const [scheduledAt, setScheduledAt] = useState('')
   const [publishedAt, setPublishedAt] = useState('')
@@ -46,7 +47,7 @@ export default function TopicDetail() {
   useEffect(() => {
     if (isNew) return
     void api.get<Topic>(`/api/social-media/topic/${id}`).then((value) => {
-      setTopic(value); setTitle(value.title); setDescription(value.description || ''); setCategory(value.category || '')
+      setTopic(value); setTitle(value.title); setDescription(value.description || ''); setCategory(value.category || ''); setSeries(value.series || '')
       setStatus(value.status); setScheduledAt(toLocalInput(value.scheduled_at)); setPublishedAt(toLocalInput(value.published_at))
       setPublications(value.publications.map((item) => ({ platform: item.platform, social_media_video_id: item.social_media_video_id })))
       setVideoSearchTerms(Object.fromEntries(value.publications.map((item, index) => [index, item.video_title || ''])))
@@ -54,10 +55,10 @@ export default function TopicDetail() {
   }, [id, isNew, show])
 
   const payload = useMemo(() => ({
-    title: title.trim(), description: description.trim() || null, category: category.trim() || null, status,
+    title: title.trim(), description: description.trim() || null, category: category.trim() || null, series: series.trim() || null, status,
     scheduled_at: toIso(scheduledAt), published_at: toIso(publishedAt),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, publications,
-  }), [category, description, publications, publishedAt, scheduledAt, status, title])
+  }), [category, description, publications, publishedAt, scheduledAt, series, status, title])
 
   const uploadCover = async (target: Topic, file: File) => {
     const form = new FormData(); form.append('file', file)
@@ -109,7 +110,7 @@ export default function TopicDetail() {
       <div className="space-y-4">
         <label className="block text-sm">标题<input disabled={!editing} value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label>
         <label className="block text-sm">详情<textarea disabled={!editing} value={description} onChange={(event) => setDescription(event.target.value)} rows={5} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label>
-        <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm">分类<input disabled={!editing} value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">状态<select disabled={!editing} value={status} onChange={(event) => setStatus(event.target.value as TopicStatus)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800">{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">预计发布时间<input disabled={!editing} type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">实际发布时间<input disabled={!editing} type="datetime-local" value={publishedAt} onChange={(event) => setPublishedAt(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label></div>
+        <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm">分类<input disabled={!editing} value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">系列<input disabled={!editing} value={series} onChange={(event) => setSeries(event.target.value)} placeholder="例如：产品拆解" className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">状态<select disabled={!editing} value={status} onChange={(event) => setStatus(event.target.value as TopicStatus)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800">{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">预计发布时间<input disabled={!editing} type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">实际发布时间<input disabled={!editing} type="datetime-local" value={publishedAt} onChange={(event) => setPublishedAt(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label></div>
         <div className="rounded-md border border-slate-200 p-3 dark:border-slate-700">{topic?.cover_url ? <img src={topic.cover_url} alt="选题封面" className="mb-3 max-h-52 rounded object-cover" /> : null}{coverFile && <p className="mb-2 text-sm text-slate-500">待上传：{coverFile.name}</p>}{editing && <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-violet-500"><Upload size={16} />{topic?.cover_url ? '替换封面' : '选择封面'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={(event) => setCoverFile(event.target.files?.[0] || null)} /></label>}{editing && topic?.cover_url && <button type="button" onClick={() => void removeCover()} className="ml-4 text-sm text-rose-500">移除封面</button>}</div>
         <div>
           <div className="mb-2 flex items-center justify-between"><span className="text-sm font-medium">发布平台</span>{editing && <button type="button" onClick={() => setPublications((items) => [...items, emptyPublication()])} className="inline-flex items-center gap-1 text-sm text-violet-500"><Plus size={15} />添加</button>}</div>

@@ -50,6 +50,7 @@ class TopicCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     description: str | None = None
     category: str | None = Field(default=None, max_length=120)
+    series: str | None = Field(default=None, max_length=120)
     status: TopicStatus = "not_started"
     scheduled_at: datetime | None = None
     published_at: datetime | None = None
@@ -67,6 +68,7 @@ class TopicPatch(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=500)
     description: str | None = None
     category: str | None = Field(default=None, max_length=120)
+    series: str | None = Field(default=None, max_length=120)
     status: TopicStatus | None = None
     scheduled_at: datetime | None = None
     published_at: datetime | None = None
@@ -85,6 +87,7 @@ class TopicOut(BaseModel):
     title: str
     description: str | None
     category: str | None
+    series: str | None
     status: TopicStatus
     scheduled_at: str | None
     published_at: str | None
@@ -99,6 +102,7 @@ class TopicOut(BaseModel):
 class TopicListOut(BaseModel):
     items: list[TopicOut]
     categories: list[str]
+    series: list[str]
 
 
 class VideoOut(BaseModel):
@@ -185,7 +189,7 @@ def _to_out(topic: ContentTopic, session: Session) -> TopicOut:
     videos = {item.id: item for item in session.query(SocialMediaVideo).filter(SocialMediaVideo.id.in_(video_ids)).all()} if video_ids else {}
     task = session.get(UserTask, topic.task_id) if topic.task_id else None
     return TopicOut(
-        id=topic.id, title=topic.title, description=topic.description, category=topic.category,
+        id=topic.id, title=topic.title, description=topic.description, category=topic.category, series=topic.series,
         status=topic.status, scheduled_at=utc_isoformat(topic.scheduled_at) if topic.scheduled_at else None,
         published_at=utc_isoformat(topic.published_at) if topic.published_at else None,
         cover_url=f"/api/social-media/topic/{topic.id}/cover" if topic.cover_path else None,
@@ -200,7 +204,8 @@ def _to_out(topic: ContentTopic, session: Session) -> TopicOut:
 
 @router.get("", response_model=TopicListOut)
 def list_topics(query: str | None = Query(default=None), status: TopicStatus | None = None,
-                category: str | None = None, session: Session = Depends(get_session)) -> TopicListOut:
+                category: str | None = None, series: str | None = None,
+                session: Session = Depends(get_session)) -> TopicListOut:
     topics = session.query(ContentTopic)
     if query:
         pattern = f"%{query.strip()}%"
@@ -209,10 +214,13 @@ def list_topics(query: str | None = Query(default=None), status: TopicStatus | N
         topics = topics.filter(ContentTopic.status == status)
     if category:
         topics = topics.filter(ContentTopic.category == category)
+    if series:
+        topics = topics.filter(ContentTopic.series == series)
     items = topics.order_by(ContentTopic.updated_at.desc()).all()
     categories = [value for (value,) in session.query(ContentTopic.category).filter(ContentTopic.category.is_not(None)).distinct().order_by(ContentTopic.category).all()]
-    logger.info("topic.list query=%s status=%s category=%s count=%d", query, status, category, len(items))
-    return TopicListOut(items=[_to_out(topic, session) for topic in items], categories=categories)
+    series_values = [value for (value,) in session.query(ContentTopic.series).filter(ContentTopic.series.is_not(None)).distinct().order_by(ContentTopic.series).all()]
+    logger.info("topic.list query=%s status=%s category=%s series=%s count=%d", query, status, category, series, len(items))
+    return TopicListOut(items=[_to_out(topic, session) for topic in items], categories=categories, series=series_values)
 
 
 @router.get("/available", response_model=list[TopicOut])
@@ -240,7 +248,7 @@ def list_topic_videos(
 @router.post("", response_model=TopicOut, status_code=201)
 def create_topic(body: TopicCreate, session: Session = Depends(get_session)) -> TopicOut:
     publications = _validate_publications(body.publications, session)
-    topic = ContentTopic(title=body.title.strip(), description=body.description, category=body.category,
+    topic = ContentTopic(title=body.title.strip(), description=body.description, category=body.category, series=body.series,
         status=body.status, scheduled_at=_utc_naive(body.scheduled_at), published_at=_utc_naive(body.published_at))
     session.add(topic)
     session.flush()
@@ -266,7 +274,7 @@ def update_topic(topic_id: str, body: TopicPatch, session: Session = Depends(get
     topic = session.get(ContentTopic, topic_id)
     if topic is None:
         raise HTTPException(status_code=404, detail="选题不存在")
-    for field in ("title", "description", "category", "status"):
+    for field in ("title", "description", "category", "series", "status"):
         if field in body.model_fields_set:
             setattr(topic, field, getattr(body, field))
     if "scheduled_at" in body.model_fields_set:
