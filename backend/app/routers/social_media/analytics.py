@@ -84,6 +84,7 @@ class SocialMediaSettingsOut(BaseModel):
     youtube_client_id: Optional[str]
     youtube_client_secret_masked: Optional[str]
     youtube_connected: bool
+    youtube_reauthorization_required: bool = False
     youtube_channel_id: Optional[str]
     youtube_channel_title: Optional[str]
     last_run_at: Optional[str]
@@ -194,6 +195,7 @@ def _settings_out() -> SocialMediaSettingsOut:
         youtube_client_id=config.youtube_client_id,
         youtube_client_secret_masked=_masked(config.youtube_client_secret),
         youtube_connected=config.youtube_connected,
+        youtube_reauthorization_required=bool(config.youtube_channel_id and not config.youtube_refresh_token),
         youtube_channel_id=config.youtube_channel_id,
         youtube_channel_title=config.youtube_channel_title,
         last_run_at=config.last_run_at,

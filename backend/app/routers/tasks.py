@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..db import get_session
 from ..logger import get_logger
 from ..models import ContentTopic, UserTask
+from ..services.task_dates import log_completion_change, validate_task_dates
 from ..time_utils import get_timezone, utc_isoformat, utc_naive_to_local
 
 router = APIRouter()
@@ -25,6 +26,8 @@ class TaskCreate(BaseModel):
     due_date: Optional[str] = None   # 'YYYY-MM-DD'
     topic_id: Optional[str] = None
     timezone: str = "UTC"
+    completed: bool = False
+    actual_completion_date: Optional[str] = None
 
 
 class TaskPatch(BaseModel):
@@ -34,6 +37,8 @@ class TaskPatch(BaseModel):
     start_date: Optional[str] = None
     due_date: Optional[str] = None
     completed: Optional[bool] = None
+    actual_completion_date: Optional[str] = None
+    timezone: str = "UTC"
 
 
 class TaskOut(BaseModel):
@@ -45,6 +50,7 @@ class TaskOut(BaseModel):
     due_date: Optional[str]
     completed: bool
     completed_at: Optional[str]
+    actual_completion_date: Optional[str]
     created_at: str
     updated_at: str
 
@@ -61,6 +67,7 @@ def _to_out(task: UserTask) -> TaskOut:
         due_date=task.due_date,
         completed=task.completed,
         completed_at=utc_isoformat(task.completed_at) if task.completed_at else None,
+        actual_completion_date=task.actual_completion_date,
         created_at=utc_isoformat(task.created_at),
         updated_at=utc_isoformat(task.updated_at),
     )
@@ -87,12 +94,22 @@ def create_task(body: TaskCreate, session: Session = Depends(get_session)) -> Ta
     due_date = body.due_date
     if topic and topic.scheduled_at:
         due_date = utc_naive_to_local(topic.scheduled_at, timezone.key).date().isoformat()
+    actual = body.actual_completion_date
+    if body.completed and actual is None:
+        actual = datetime.now(timezone).date().isoformat()
+    try:
+        validate_task_dates(body.start_date, due_date, actual, body.completed, timezone.key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     task = UserTask(
         title=body.title,
         description=body.description,
         category=body.category,
         start_date=body.start_date,
         due_date=due_date,
+        completed=body.completed,
+        completed_at=datetime.utcnow() if body.completed else None,
+        actual_completion_date=actual,
     )
     session.add(task)
     session.flush()
@@ -102,6 +119,7 @@ def create_task(body: TaskCreate, session: Session = Depends(get_session)) -> Ta
         topic.updated_at = datetime.utcnow()
     session.commit()
     session.refresh(task)
+    log_completion_change(task.id, False, task.completed, None, task.actual_completion_date)
     logger.info("任务已创建 task_id=%s category=%s due_date=%s", task.id, task.category, task.due_date)
     return _to_out(task)
 
@@ -112,16 +130,35 @@ def update_task(task_id: str, body: TaskPatch, session: Session = Depends(get_se
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    fields = body.model_fields_set
+    old_completed, old_date = task.completed, task.actual_completion_date
+    completed = body.completed if body.completed is not None else task.completed
+    start = body.start_date if "start_date" in fields else task.start_date
+    due = body.due_date if "due_date" in fields else task.due_date
+    actual = body.actual_completion_date if "actual_completion_date" in fields else old_date
+    try:
+        timezone = get_timezone(body.timezone)
+        if not completed:
+            if body.actual_completion_date is not None:
+                raise ValueError("未完成任务不能填写实际完成日期")
+            actual = None
+        elif "actual_completion_date" not in fields and actual is None:
+            actual = (utc_naive_to_local(task.completed_at, timezone.key).date().isoformat()
+                      if task.completed and task.completed_at
+                      else datetime.now(timezone).date().isoformat())
+        validate_task_dates(start, due, actual, completed, timezone.key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     if body.title is not None:
         task.title = body.title
     if body.description is not None:
         task.description = body.description
     if body.category is not None:
         task.category = body.category
-    if body.start_date is not None:
-        task.start_date = body.start_date
-    if body.due_date is not None:
-        task.due_date = body.due_date
+    task.start_date = start
+    task.due_date = due
+    task.actual_completion_date = actual
 
     # 切换完成状态时记录时间
     if body.completed is not None and body.completed != task.completed:
@@ -132,6 +169,7 @@ def update_task(task_id: str, body: TaskPatch, session: Session = Depends(get_se
     task.updated_at = datetime.utcnow()
     session.commit()
     session.refresh(task)
+    log_completion_change(task.id, old_completed, task.completed, old_date, actual)
     logger.info("任务已更新 task_id=%s", task.id)
     return _to_out(task)
 

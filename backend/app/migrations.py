@@ -16,6 +16,7 @@ class SchemaCompatibilityError(RuntimeError):
 
 
 _REQUIRED_COLUMNS: dict[str, set[str]] = {
+    "user_task": {"actual_completion_date"},
     "task_queue": {"dedupe_key"},
     "social_media_video": {"external_video_id", "published_at"},
     "social_media_video_metric": {"video_id", "data_date", "updated_at"},

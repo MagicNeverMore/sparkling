@@ -23,7 +23,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from ...logger import get_logger
-from .config import SocialMediaConfig, update_social_media_config
+from .config import SocialMediaConfig, require_youtube_reauthorization, update_social_media_config
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -278,6 +278,10 @@ def _refresh_credentials(config: SocialMediaConfig) -> Credentials:
     try:
         credentials.refresh(GoogleRequest())
     except RefreshError as exc:
+        # 只对 Google 明确返回的永久授权失效暂停采集；网络和服务端错误不清除凭据。
+        if any(isinstance(arg, dict) and arg.get("error") == "invalid_grant" for arg in exc.args):
+            require_youtube_reauthorization(config)
+            raise ValueError("YouTube 授权已失效，自动采集已暂停，请重新连接账号") from exc
         logger.exception("youtube.credentials.refresh.failed channel_id=%s error=%s", config.youtube_channel_id, exc)
         raise ValueError("YouTube credential 刷新失败，请重新连接账号") from exc
     except Exception:

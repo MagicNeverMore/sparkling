@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api } from './api'
+import { format } from 'date-fns'
 
 export interface Task {
   id: string
@@ -10,6 +11,7 @@ export interface Task {
   dueDate?: string    // 'YYYY-MM-DD'
   completed: boolean
   completedAt?: string
+  actualCompletionDate?: string
   createdAt: string
   updatedAt: string
 }
@@ -23,6 +25,7 @@ interface TaskApiRaw {
   due_date?: string | null
   completed: boolean
   completed_at?: string | null
+  actual_completion_date?: string | null
   created_at: string
   updated_at: string
 }
@@ -37,6 +40,7 @@ const fromRaw = (r: TaskApiRaw): Task => ({
   dueDate: r.due_date ?? undefined,
   completed: r.completed,
   completedAt: r.completed_at ?? undefined,
+  actualCompletionDate: r.actual_completion_date ?? undefined,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 })
@@ -45,8 +49,10 @@ export interface TaskCreatePayload {
   title: string
   description?: string
   category?: string
-  startDate?: string
-  dueDate?: string
+  startDate?: string | null
+  dueDate?: string | null
+  completed?: boolean
+  actualCompletionDate?: string | null
   topicId?: string
   timezone?: string
 }
@@ -82,6 +88,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       category: payload.category,
       start_date: payload.startDate,
       due_date: payload.dueDate,
+      completed: payload.completed,
+      actual_completion_date: payload.actualCompletionDate,
       topic_id: payload.topicId,
       timezone: payload.timezone,
     })
@@ -96,6 +104,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       start_date: patch.startDate,
       due_date: patch.dueDate,
       completed: patch.completed,
+      actual_completion_date: patch.actualCompletionDate,
+      timezone: patch.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     })
     set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? fromRaw(raw) : t)) }))
   },
@@ -106,17 +116,21 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     // 乐观更新
     set((s) => ({
       tasks: s.tasks.map((t) =>
-        t.id === id ? { ...t, completed: !t.completed, completedAt: !t.completed ? new Date().toISOString() : undefined } : t,
+        t.id === id ? { ...t, completed: !t.completed, completedAt: !t.completed ? new Date().toISOString() : undefined,
+          actualCompletionDate: !t.completed ? format(new Date(), 'yyyy-MM-dd') : undefined } : t,
       ),
     }))
     try {
-      const raw = await api.patch<TaskApiRaw>(`/api/tasks/${id}`, { completed: !task.completed })
+      const raw = await api.patch<TaskApiRaw>(`/api/tasks/${id}`, { completed: !task.completed,
+        actual_completion_date: !task.completed ? format(new Date(), 'yyyy-MM-dd') : null,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })
       set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? fromRaw(raw) : t)) }))
-    } catch {
+    } catch (error) {
       // 回滚
       set((s) => ({
         tasks: s.tasks.map((t) => (t.id === id ? task : t)),
       }))
+      throw error
     }
   },
 
@@ -125,8 +139,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) }))
     try {
       await api.del(`/api/tasks/${id}`)
-    } catch {
-      set({ tasks: previous })
+    } catch (error) {
+      const deleted = previous.find((task) => task.id === id)
+      set((s) => ({ tasks: deleted && !s.tasks.some((task) => task.id === id) ? [...s.tasks, deleted] : s.tasks }))
+      throw error
     }
   },
 }))
