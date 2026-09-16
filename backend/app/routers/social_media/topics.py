@@ -17,6 +17,7 @@ from ...config import config
 from ...db import get_current_database_config, get_session
 from ...logger import get_logger
 from ...models import ContentTopic, ContentTopicPublication, SocialMediaVideo, UserTask
+from ...services.task_dates import log_completion_change, validate_task_dates
 from ...time_utils import get_timezone, utc_isoformat, utc_naive_to_local
 
 router = APIRouter()
@@ -138,7 +139,7 @@ def _task_due_date(topic: ContentTopic, timezone_name: str) -> str | None:
     return utc_naive_to_local(topic.scheduled_at, timezone_name).date().isoformat()
 
 
-def _sync_task(topic: ContentTopic, session: Session, timezone_name: str) -> None:
+def _sync_task(topic: ContentTopic, session: Session, timezone_name: str) -> tuple[UserTask, str | None] | None:
     task = session.get(UserTask, topic.task_id) if topic.task_id else None
     if topic.task_id and task is None:
         topic.task_id = None
@@ -154,12 +155,30 @@ def _sync_task(topic: ContentTopic, session: Session, timezone_name: str) -> Non
             session.flush()
             topic.task_id = task.id
         else:
-            task.due_date = _task_due_date(topic, timezone_name)
+            due_date = _task_due_date(topic, timezone_name)
+            actual = task.actual_completion_date
+            if task.completed and actual is None and task.completed_at:
+                actual = utc_naive_to_local(task.completed_at, timezone_name).date().isoformat()
+            try:
+                validate_task_dates(task.start_date, due_date, actual, task.completed, timezone_name)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            task.due_date = due_date
             task.updated_at = datetime.utcnow()
     elif topic.status == "published" and task is not None and not task.completed:
+        old_date = task.actual_completion_date
+        completed_at = datetime.utcnow()
+        actual = utc_naive_to_local(completed_at, timezone_name).date().isoformat()
+        try:
+            validate_task_dates(task.start_date, task.due_date, actual, True, timezone_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         task.completed = True
-        task.completed_at = datetime.utcnow()
+        task.completed_at = completed_at
+        task.actual_completion_date = actual
         task.updated_at = datetime.utcnow()
+        return task, old_date
+    return None
 
 
 def _validate_publications(items: list[PublicationIn], session: Session) -> dict[str, SocialMediaVideo]:
@@ -253,8 +272,11 @@ def create_topic(body: TopicCreate, session: Session = Depends(get_session)) -> 
     session.add(topic)
     session.flush()
     session.add_all([ContentTopicPublication(topic_id=topic.id, platform=publications[item.social_media_video_id].platform if item.social_media_video_id else item.platform, social_media_video_id=item.social_media_video_id) for item in body.publications])
-    _sync_task(topic, session, body.timezone)
+    completion_change = _sync_task(topic, session, body.timezone)
     session.commit()
+    if completion_change:
+        task, old_date = completion_change
+        log_completion_change(task.id, False, True, old_date, task.actual_completion_date)
     session.refresh(topic)
     logger.info("topic.created topic_id=%s status=%s publications=%d task_id=%s", topic.id, topic.status, len(body.publications), topic.task_id)
     return _to_out(topic, session)
@@ -284,8 +306,11 @@ def update_topic(topic_id: str, body: TopicPatch, session: Session = Depends(get
     if body.publications is not None:
         _replace_publications(topic, body.publications, session)
     topic.updated_at = datetime.utcnow()
-    _sync_task(topic, session, body.timezone)
+    completion_change = _sync_task(topic, session, body.timezone)
     session.commit()
+    if completion_change:
+        task, old_date = completion_change
+        log_completion_change(task.id, False, True, old_date, task.actual_completion_date)
     session.refresh(topic)
     logger.info("topic.updated topic_id=%s fields=%s status=%s task_id=%s", topic.id, sorted(body.model_fields_set), topic.status, topic.task_id)
     return _to_out(topic, session)

@@ -133,3 +133,23 @@ def disconnect_youtube() -> SocialMediaConfig:
         last_run_at=None,
         next_run_at=None,
     )
+
+
+def require_youtube_reauthorization(config: SocialMediaConfig) -> bool:
+    """仅使本次失败的凭据失效，避免旧任务覆盖刚完成的新授权。保留频道用于展示状态。"""
+    with connect_control_db() as conn:
+        cursor = conn.execute(
+            """UPDATE social_media_config
+            SET youtube_refresh_token = NULL, next_run_at = NULL, updated_at = ?
+            WHERE id = 1 AND youtube_refresh_token = ?
+              AND youtube_client_id IS ? AND youtube_client_secret IS ?""",
+            (datetime.utcnow().isoformat(timespec="seconds"), config.youtube_refresh_token,
+             config.youtube_client_id, config.youtube_client_secret),
+        )
+        conn.commit()
+    if cursor.rowcount:
+        logger.warning(
+            "social_media.connection.reauthorization_required reason=invalid_grant "
+            "channel_id=%s automatic_collection_paused=True", config.youtube_channel_id,
+        )
+    return bool(cursor.rowcount)

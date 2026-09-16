@@ -138,9 +138,12 @@ export default function SocialMediaSettingsSection() {
             <Link to="/settings/social-media/youtube-oauth-guide" className="mt-2 inline-block text-sm text-violet-500 hover:text-violet-400">{t('socialMedia.guide.link')}</Link>
           </div>
           <span className={`rounded-full px-2.5 py-1 text-xs ${settings.youtube_connected ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>
-            {settings.youtube_connected ? t('socialMedia.connected') : t('socialMedia.notConnected')}
+            {settings.youtube_reauthorization_required ? t('socialMedia.reauthorizationRequired') : settings.youtube_connected ? t('socialMedia.connected') : t('socialMedia.notConnected')}
           </span>
         </div>
+        {settings.youtube_reauthorization_required && (
+          <p role="alert" className="mt-4 text-sm text-amber-700 dark:text-amber-300">{t('socialMedia.reauthorizationHelp')}</p>
+        )}
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <label className="text-sm text-slate-500">
             OAuth Client ID

@@ -68,6 +68,7 @@ export interface SocialMediaSettings {
   youtube_client_id: string | null
   youtube_client_secret_masked: string | null
   youtube_connected: boolean
+  youtube_reauthorization_required: boolean
   youtube_channel_id: string | null
   youtube_channel_title: string | null
   last_run_at: string | null

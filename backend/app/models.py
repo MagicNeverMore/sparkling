@@ -135,6 +135,7 @@ class UserTask(Base):
     due_date: Mapped[str | None] = mapped_column(String)  # 'YYYY-MM-DD'
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
     completed_at: Mapped[datetime | None] = mapped_column()
+    actual_completion_date: Mapped[str | None] = mapped_column(String)  # 全天日期，不做时区转换
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 

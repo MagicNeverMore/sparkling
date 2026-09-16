@@ -1,196 +1,96 @@
-import { useState, useMemo } from 'react'
-import {
-  startOfMonth, endOfMonth,
-  startOfWeek, endOfWeek,
-  eachDayOfInterval, eachWeekOfInterval,
-  addDays, addMonths, subMonths,
-  isSameMonth, isSameDay, isToday,
-  parseISO, isAfter, isBefore,
-  format, max, min,
-} from 'date-fns'
+import { useMemo, useState } from 'react'
+import { addDays, addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, parseISO, startOfMonth, startOfWeek } from 'date-fns'
+import { Check, ChevronLeft, ChevronRight, Flag } from 'lucide-react'
 import type { Task } from '../../lib/taskStore'
 import { useI18n } from '../../lib/I18nProvider'
+import { dayTone, localDate, taskTimeline } from './taskTimeline'
 
 interface Props {
   tasks: Task[]
-  onDateClick: (date: Date) => void
+  today: string
+  selectedDate: string | null
+  onDateClick: (date: string) => void
+  onEdit: (task: Task) => void
+}
+const tones = {
+  normal: 'bg-violet-100 dark:bg-violet-900',
+  completed: 'bg-emerald-100 dark:bg-emerald-900',
+  overdue: 'bg-orange-200 dark:bg-orange-900',
+  planned: 'bg-slate-100 dark:bg-slate-800',
 }
 
-interface Bar {
-  task: Task
-  startCol: number       // 0–6
-  endCol: number         // 0–6
-  continuesLeft: boolean  // 从上一周延续
-  continuesRight: boolean // 延续到下一周
-  lane: number
-}
-
-function getTaskInterval(task: Task): { start: Date; end: Date } | null {
-  const s = task.startDate ? parseISO(task.startDate) : task.dueDate ? parseISO(task.dueDate) : null
-  const e = task.dueDate ? parseISO(task.dueDate) : task.startDate ? parseISO(task.startDate) : null
-  if (!s || !e) return null
-  return isAfter(s, e) ? { start: e, end: s } : { start: s, end: e }
-}
-
-// 贪心算法：为一周内的任务条分配泳道，避免视觉重叠
-function computeLanes(tasks: Task[], weekDays: Date[]): Bar[][] {
-  const weekStart = weekDays[0]
-  const weekEnd = weekDays[6]
-
-  const raw: Omit<Bar, 'lane'>[] = tasks
-    .flatMap((t) => {
-      const iv = getTaskInterval(t)
-      if (!iv) return []
-      const { start, end } = iv
-      if (isAfter(start, weekEnd) || isBefore(end, weekStart)) return []
-
-      const barStart = max([start, weekStart])
-      const barEnd = min([end, weekEnd])
-      const sc = weekDays.findIndex((d) => isSameDay(d, barStart))
-      const ec = weekDays.findIndex((d) => isSameDay(d, barEnd))
-
-      return [{
-        task: t,
-        startCol: sc >= 0 ? sc : 0,
-        endCol: ec >= 0 ? ec : 6,
-        continuesLeft: isBefore(start, weekStart),
-        continuesRight: isAfter(end, weekEnd),
-      }]
-    })
-    // 较长的任务优先排，使泳道利用率更高
-    .sort((a, b) => (b.endCol - b.startCol) - (a.endCol - a.startCol))
-
-  const occupied: Omit<Bar, 'lane'>[][] = []
-  const result: Bar[] = []
-
-  for (const bar of raw) {
-    let placed = false
-    for (let i = 0; i < occupied.length; i++) {
-      const clash = occupied[i].some(
-        (b) => b.startCol <= bar.endCol && b.endCol >= bar.startCol,
-      )
-      if (!clash) {
-        occupied[i].push(bar)
-        result.push({ ...bar, lane: i })
-        placed = true
-        break
-      }
-    }
-    if (!placed) {
-      occupied.push([bar])
-      result.push({ ...bar, lane: occupied.length - 1 })
-    }
-  }
-
-  const maxLane = result.reduce((m, b) => Math.max(m, b.lane), -1)
-  return Array.from({ length: maxLane + 1 }, (_, i) => result.filter((b) => b.lane === i))
-}
-
-const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
-const WEEKDAYS_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
-export default function TaskCalendar({ tasks, onDateClick }: Props) {
+export default function TaskCalendar({ tasks, today, selectedDate, onDateClick, onEdit }: Props) {
   const { lang } = useI18n()
-  const [currentMonth, setCurrentMonth] = useState(new Date())
-
+  const zh = lang === 'zh'
+  const [month, setMonth] = useState(() => startOfMonth(parseISO(today)))
   const weeks = useMemo(() => {
-    const monthStart = startOfMonth(currentMonth)
-    const monthEnd = endOfMonth(currentMonth)
-    const firstWeekStart = startOfWeek(monthStart, { weekStartsOn: 1 })
-    const lastWeekEnd = endOfWeek(monthEnd, { weekStartsOn: 1 })
-
-    return eachWeekOfInterval(
-      { start: firstWeekStart, end: lastWeekEnd },
-      { weekStartsOn: 1 },
-    ).map((weekStart) => {
-      const weekDays = eachDayOfInterval({ start: weekStart, end: addDays(weekStart, 6) })
-      return { weekStart, weekDays, lanes: computeLanes(tasks, weekDays) }
+    const first = startOfWeek(startOfMonth(month), { weekStartsOn: 1 })
+    const last = endOfWeek(endOfMonth(month), { weekStartsOn: 1 })
+    const intervals = tasks.flatMap(task => {
+      const interval = taskTimeline(task, today)
+      return interval ? [{ task, ...interval }] : []
+    }).sort((a, b) => a.start.localeCompare(b.start) || b.end.localeCompare(a.end) || a.task.id.localeCompare(b.task.id))
+    // 先按完整区间排泳道，再裁剪周段；分色不会拆散同一个任务。
+    const laneEnds: string[] = []
+    const bars = intervals.filter(item => item.start <= localDate(last) && item.end >= localDate(first)).map(item => {
+      let lane = laneEnds.findIndex(end => end < item.start)
+      if (lane < 0) lane = laneEnds.length
+      laneEnds[lane] = item.end
+      return { ...item, lane }
     })
-  }, [currentMonth, tasks])
+    const result = []
+    for (let date = first; date <= last; date = addDays(date, 7)) {
+      const days = eachDayOfInterval({ start: date, end: addDays(date, 6) }).map(day => localDate(day))
+      result.push({ days, bars: bars.filter(bar => bar.start <= days[6] && bar.end >= days[0]) })
+    }
+    return result
+  }, [month, tasks, today])
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
-      {/* 月份导航 */}
-      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-        <button
-          type="button"
-          onClick={() => setCurrentMonth((m) => subMonths(m, 1))}
-          className="rounded-md px-2 py-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-        >
-          ‹
-        </button>
-        <span className="text-sm font-medium text-slate-800 dark:text-slate-200">
-          {format(currentMonth, lang === 'zh' ? 'yyyy 年 M 月' : 'MMM yyyy')}
-        </span>
-        <button
-          type="button"
-          onClick={() => setCurrentMonth((m) => addMonths(m, 1))}
-          className="rounded-md px-2 py-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-        >
-          ›
-        </button>
+    <section aria-label={zh ? '任务日历' : 'Task calendar'} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4 dark:border-slate-800">
+        <h2 className="text-lg font-semibold text-slate-950 dark:text-slate-100">{format(month, zh ? 'yyyy 年 M 月' : 'MMMM yyyy')}</h2>
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={() => { setMonth(startOfMonth(parseISO(today))); onDateClick(today) }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">{zh ? '回到今天' : 'Today'}</button>
+          <button type="button" aria-label={zh ? '上个月' : 'Previous month'} onClick={() => setMonth(value => addMonths(value, -1))} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"><ChevronLeft size={18} /></button>
+          <button type="button" aria-label={zh ? '下个月' : 'Next month'} onClick={() => setMonth(value => addMonths(value, 1))} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"><ChevronRight size={18} /></button>
+        </div>
       </div>
-
-      {/* 星期表头 */}
-      <div className="grid grid-cols-7 border-b border-slate-200 dark:border-slate-800">
-        {(lang === 'zh' ? WEEKDAYS : WEEKDAYS_EN).map((d) => (
-          <div key={d} className="py-2 text-center text-xs text-slate-600">{d}</div>
-        ))}
+      <div className="flex flex-wrap gap-x-4 gap-y-2 px-4 py-3 text-xs text-slate-600 dark:text-slate-400">
+        {([['normal', zh ? '计划中' : 'Planned'], ['completed', zh ? '已完成周期' : 'Completed'], ['overdue', zh ? '延期' : 'Overdue'], ['planned', zh ? '提前完成后的计划' : 'Remaining plan']] as const).map(([tone, label]) => <span key={tone} className="flex items-center gap-1.5"><span className={`h-2.5 w-2.5 rounded-sm ${tones[tone]}`} />{label}</span>)}
+        <span className="flex items-center gap-1"><Flag size={12} />{zh ? '截止' : 'Due'}</span>
+        <span className="flex items-center gap-1"><Check size={12} />{zh ? '实际完成' : 'Finished'}</span>
       </div>
-
-      {/* 周行 */}
-      {weeks.map(({ weekStart, weekDays, lanes }) => (
-        <div key={weekStart.toISOString()} className="border-b border-slate-200 last:border-b-0 dark:border-slate-800">
-          {/* 日期数字 */}
-          <div className="grid grid-cols-7">
-            {weekDays.map((day) => (
-              <button
-                key={day.toISOString()}
-                type="button"
-                onClick={() => onDateClick(day)}
-                className={`py-1.5 text-center text-xs transition hover:bg-slate-100 dark:hover:bg-slate-800 ${
-                  !isSameMonth(day, currentMonth)
-                    ? 'text-slate-300 dark:text-slate-700'
-                    : isToday(day)
-                      ? 'font-bold text-violet-400'
-                      : 'text-slate-400'
-                }`}
-              >
-                {day.getDate()}
-              </button>
-            ))}
+      <div className="overflow-x-auto">
+        <div className="min-w-[560px]">
+          <div className="grid grid-cols-7 border-y border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/30">
+            {(zh ? ['一', '二', '三', '四', '五', '六', '日'] : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']).map(day => <span key={day} className="py-2 text-center text-xs text-slate-500">{day}</span>)}
           </div>
-
-          {/* 甘特条：每条一个泳道，用 CSS grid 跨列 */}
-          {lanes.map((laneBars, laneIdx) => (
-            <div key={laneIdx} className="grid grid-cols-7 pb-0.5 pl-px pr-px">
-              {laneBars.map((bar) => (
-                <div
-                  key={bar.task.id}
-                  style={{ gridColumn: `${bar.startCol + 1} / ${bar.endCol + 2}` }}
-                  title={bar.task.title}
-                  className={[
-                    'flex h-5 cursor-pointer items-center overflow-hidden text-xs transition',
-                    bar.continuesLeft ? 'pl-1' : 'ml-0.5 rounded-l-full pl-2',
-                    bar.continuesRight ? 'pr-0' : 'mr-0.5 rounded-r-full',
-                    bar.task.completed
-                      ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
-                      : 'bg-violet-500/25 text-violet-300 hover:bg-violet-500/40',
-                  ].join(' ')}
-                >
-                  {/* 从左侧开始的段才显示标题，避免截断段显示错误标题 */}
-                  {!bar.continuesLeft && (
-                    <span className="truncate leading-none">{bar.task.title}</span>
-                  )}
-                </div>
-              ))}
+          {weeks.map(({ days, bars }) => (
+            <div key={days[0]} className="min-h-28 border-b border-slate-200 pb-3 last:border-0 dark:border-slate-800">
+              <div className="grid grid-cols-7">
+                {days.map(day => <button key={day} type="button" aria-label={day} aria-pressed={selectedDate === day} onClick={() => onDateClick(day)} className={`m-1 rounded-lg py-2 text-xs hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-500 dark:hover:bg-violet-950 ${selectedDate === day ? 'bg-violet-100 font-bold text-violet-800 dark:bg-violet-950 dark:text-violet-200' : day === today ? 'font-bold text-violet-600 dark:text-violet-300' : day.slice(0, 7) !== format(month, 'yyyy-MM') ? 'text-slate-400 dark:text-slate-600' : 'text-slate-700 dark:text-slate-300'}`}>{parseISO(day).getDate()}</button>)}
+              </div>
+              <div className="grid grid-cols-7 gap-y-1 px-1" style={{ gridAutoRows: '34px' }}>
+                {bars.map(bar => {
+                  const visible = days.filter(day => day >= bar.start && day <= bar.end)
+                  const label = [bar.task.title, bar.task.dueDate && `${zh ? '截止' : 'Due'} ${bar.task.dueDate}`, bar.actual && `${zh ? '实际完成' : 'Finished'} ${bar.actual}`, bar.overdueDays > 0 && (zh ? `延期 ${bar.overdueDays} 天` : `${bar.overdueDays} days overdue`), !bar.task.completed && bar.overdueDays > 0 && (zh ? '仍未完成' : 'Still open')].filter(Boolean).join(' · ')
+                  return <button key={bar.task.id} type="button" title={label} aria-label={label} onClick={() => onEdit(bar.task)} style={{ gridColumn: `${days.indexOf(visible[0]) + 1} / span ${visible.length}`, gridRow: bar.lane + 1 }} className={`relative mx-px flex overflow-hidden text-left text-xs ring-inset hover:ring-2 hover:ring-violet-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-500 ${bar.start >= days[0] ? 'rounded-l-md' : ''} ${bar.end <= days[6] ? 'rounded-r-md' : ''}`}>
+                    {visible.map(day => <span key={day} className={`relative h-full min-w-0 flex-1 ${tones[dayTone(bar.task, day, today)]}`}>
+                      <span className="absolute right-0.5 top-0.5 flex gap-0.5 text-slate-700 dark:text-slate-200">
+                        {day === bar.task.dueDate && <Flag size={10} />}
+                        {day === bar.actual && <Check size={11} strokeWidth={3} />}
+                      </span>
+                    </span>)}
+                    <span className="pointer-events-none absolute inset-x-1 bottom-1 truncate font-medium text-slate-950 dark:text-white">{bar.task.title}{bar.overdueDays > 0 ? ` · ${zh ? `延期 ${bar.overdueDays} 天` : `${bar.overdueDays}d overdue`}` : ''}{!bar.task.completed && bar.overdueDays > 0 && visible.at(-1) === bar.activeEnd ? (zh ? ' · 仍未完成' : ' · Still open') : ''}</span>
+                  </button>
+                })}
+              </div>
             </div>
           ))}
-
-          {/* 无任务时保留最小高度 */}
-          {lanes.length === 0 && <div className="h-5" />}
         </div>
-      ))}
-    </div>
+      </div>
+      <p className="px-4 py-3 text-xs text-slate-500">{zh ? '点击日期查看当日任务，点击任务条编辑。窄屏可横向滑动日历。' : 'Select a day to filter tasks. Select a bar to edit. Scroll horizontally on small screens.'}</p>
+    </section>
   )
 }
