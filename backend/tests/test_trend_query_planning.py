@@ -71,7 +71,7 @@ class TrendQueryPlanningTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(queries, ["AI automation", "Technology Trend software startups"])
         self.assertIn(prompt, captured_messages[-1]["content"])
-        self.assertEqual(captured_max_tokens, [1600])
+        self.assertEqual(captured_max_tokens, [4800])
 
     async def test_planner_rejects_empty_queries(self) -> None:
         _db, models, collector, _TrendCandidate = _app_modules()
@@ -95,7 +95,7 @@ class TrendQueryPlanningTest(unittest.IsolatedAsyncioTestCase):
         ):
             await collector.plan_search_queries(settings, "关注热点：AI", {"github": {"enabled": True, "limit": 8}})
 
-    async def test_planner_uses_reasoning_content_when_content_is_empty(self) -> None:
+    async def test_planner_rejects_reasoning_content_when_content_is_empty(self) -> None:
         _db, models, collector, _TrendCandidate = _app_modules()
         settings = models.Settings(trend_model="fake-model")
 
@@ -106,14 +106,37 @@ class TrendQueryPlanningTest(unittest.IsolatedAsyncioTestCase):
                 "_create_json_chat_completion",
                 AsyncMock(return_value=_completion(None, reasoning_content='{"queries": ["AI automation"]}')),
             ),
+            self.assertRaisesRegex(ValueError, "LLM 返回不是有效 JSON"),
         ):
-            queries = await collector.plan_search_queries(
+            await collector.plan_search_queries(
                 settings,
                 "关注热点：AI",
                 {"github": {"enabled": True, "limit": 8}},
             )
 
-        self.assertEqual(queries, ["AI automation"])
+
+    async def test_json_completion_repairs_invalid_types(self) -> None:
+        _db, _models, collector, _candidate = _app_modules()
+        create = AsyncMock(side_effect=[
+            _completion('{"queries": [null]}'),
+            _completion('{"queries": ["AI automation"]}'),
+        ])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        await collector._create_json_chat_completion(
+            client, model="fake-model", messages=[], validate_queries=True, max_tokens=4800,
+        )
+        self.assertEqual(create.await_count, 2)
+        self.assertIn("Output validation failed", create.call_args.kwargs["messages"][-1]["content"])
+
+    async def test_json_completion_bounds_requests(self) -> None:
+        _db, _models, collector, _candidate = _app_modules()
+        create = AsyncMock(return_value=_completion("not json"))
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        with self.assertRaisesRegex(ValueError, "最大请求次数"):
+            await collector._create_json_chat_completion(
+                client, model="fake-model", messages=[], validate_queries=True,
+            )
+        self.assertEqual(create.await_count, 3)
 
     async def test_evaluator_reserves_tokens_for_reasoning_and_json_output(self) -> None:
         _db, models, collector, TrendCandidate = _app_modules()
