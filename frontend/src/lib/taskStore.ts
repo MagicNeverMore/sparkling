@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { api } from './api'
 import { format } from 'date-fns'
 
+export type BoardStatus = 'doing' | 'next' | 'backlog'
+
 export interface Task {
   id: string
   title: string
@@ -12,6 +14,8 @@ export interface Task {
   completed: boolean
   completedAt?: string
   actualCompletionDate?: string
+  boardStatus?: BoardStatus
+  boardPosition?: number
   createdAt: string
   updatedAt: string
 }
@@ -26,6 +30,8 @@ interface TaskApiRaw {
   completed: boolean
   completed_at?: string | null
   actual_completion_date?: string | null
+  board_status: BoardStatus
+  board_position: number
   created_at: string
   updated_at: string
 }
@@ -41,6 +47,8 @@ const fromRaw = (r: TaskApiRaw): Task => ({
   completed: r.completed,
   completedAt: r.completed_at ?? undefined,
   actualCompletionDate: r.actual_completion_date ?? undefined,
+  boardStatus: r.board_status ?? 'backlog',
+  boardPosition: r.board_position ?? 0,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 })
@@ -65,11 +73,23 @@ interface TaskState {
   updateTask: (id: string, patch: Partial<TaskCreatePayload & { completed: boolean }>) => Promise<void>
   toggleComplete: (id: string) => Promise<void>
   deleteTask: (id: string) => Promise<void>
+  moveBoardTask: (id: string, status: BoardStatus, beforeId?: string) => Promise<void>
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
   loading: false,
+
+  moveBoardTask: async (id, status, beforeId) => {
+    const raw = await api.patch<TaskApiRaw[]>(`/api/tasks/board/${id}`, { status, before_id: beforeId ?? null,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })
+    const positions = new Map(raw.map(task => [task.id, task]))
+    // 只合并看板字段，不覆盖并行编辑或完成操作返回的任务内容。
+    set(state => ({ tasks: state.tasks.map(task => {
+      const updated = positions.get(task.id)
+      return updated ? { ...task, boardStatus: updated.board_status, boardPosition: updated.board_position } : task
+    }) }))
+  },
 
   loadTasks: async () => {
     set({ loading: true })

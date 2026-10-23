@@ -39,6 +39,11 @@ export default function TopicDetail() {
   const [description, setDescription] = useState('')
   const [category, setCategory] = useState('')
   const [series, setSeries] = useState('')
+  const [seriesOptions, setSeriesOptions] = useState<string[]>([])
+  const [taskOptions, setTaskOptions] = useState<{ id: string; title: string }[]>([])
+  const [taskId, setTaskId] = useState('')
+  const [optionsError, setOptionsError] = useState('')
+  const [optionsRetry, setOptionsRetry] = useState(0)
   const [status, setStatus] = useState<TopicStatus>('not_started')
   const [scheduledAt, setScheduledAt] = useState('')
   const [publishedAt, setPublishedAt] = useState('')
@@ -47,6 +52,7 @@ export default function TopicDetail() {
   useEffect(() => {
     if (isNew) return
     void api.get<Topic>(`/api/social-media/topic/${id}`).then((value) => {
+      setTaskId(value.task_id || '')
       setTopic(value); setTitle(value.title); setDescription(value.description || ''); setCategory(value.category || ''); setSeries(value.series || '')
       setStatus(value.status); setScheduledAt(toLocalInput(value.scheduled_at)); setPublishedAt(toLocalInput(value.published_at))
       setPublications(value.publications.map((item) => ({ platform: item.platform, social_media_video_id: item.social_media_video_id })))
@@ -54,11 +60,24 @@ export default function TopicDetail() {
     }).catch((error) => show(error instanceof Error ? error.message : String(error), 'error'))
   }, [id, isNew, show])
 
+  useEffect(() => {
+    if (!editing) return
+    let cancelled = false
+    Promise.all([
+      api.get<string[]>('/api/social-media/topic/series'),
+      api.get<{ id: string; title: string }[]>('/api/social-media/topic/task-options'),
+    ]).then(([seriesValues, tasks]) => {
+      if (!cancelled) { setSeriesOptions(seriesValues); setTaskOptions(tasks); setOptionsError('') }
+    }).catch(error => { if (!cancelled) setOptionsError(error instanceof Error ? error.message : String(error)) })
+    return () => { cancelled = true }
+  }, [editing, optionsRetry])
+
   const payload = useMemo(() => ({
     title: title.trim(), description: description.trim() || null, category: category.trim() || null, series: series.trim() || null, status,
     scheduled_at: toIso(scheduledAt), published_at: toIso(publishedAt),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, publications,
-  }), [category, description, publications, publishedAt, scheduledAt, series, status, title])
+    task_id: !topic?.task_id && taskId ? taskId : undefined,
+  }), [category, description, publications, publishedAt, scheduledAt, series, status, title, taskId, topic?.task_id])
 
   const uploadCover = async (target: Topic, file: File) => {
     const form = new FormData(); form.append('file', file)
@@ -74,9 +93,21 @@ export default function TopicDetail() {
       let saved = isNew ? await api.post<Topic>('/api/social-media/topic', payload) : await api.patch<Topic>(`/api/social-media/topic/${id}`, payload)
       if (coverFile) saved = await uploadCover(saved, coverFile)
       setTopic(saved); setCoverFile(null); setEditing(false)
+      setTaskId(saved.task_id || ''); setSeries(saved.series || '')
+      setStatus(saved.status); setScheduledAt(toLocalInput(saved.scheduled_at)); setPublishedAt(toLocalInput(saved.published_at))
       show(isNew ? '选题已创建' : '选题已保存', 'success')
       if (isNew) navigate(`/social-media/topics/${saved.id}`, { replace: true })
     } catch (error) { show(error instanceof Error ? error.message : String(error), 'error') } finally { setSaving(false) }
+  }
+
+  const cancelEdit = () => {
+    if (!topic) return
+    setTitle(topic.title); setDescription(topic.description || ''); setCategory(topic.category || '')
+    setSeries(topic.series || ''); setTaskId(topic.task_id || ''); setStatus(topic.status)
+    setScheduledAt(toLocalInput(topic.scheduled_at)); setPublishedAt(toLocalInput(topic.published_at))
+    setPublications(topic.publications.map(item => ({ platform: item.platform, social_media_video_id: item.social_media_video_id })))
+    setVideoSearchTerms(Object.fromEntries(topic.publications.map((item, index) => [index, item.video_title || ''])))
+    setCoverFile(null); setOpenVideoMenu(null); setEditing(false)
   }
 
   const removeCover = async () => {
@@ -110,7 +141,16 @@ export default function TopicDetail() {
       <div className="space-y-4">
         <label className="block text-sm">标题<input disabled={!editing} value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label>
         <label className="block text-sm">详情<textarea disabled={!editing} value={description} onChange={(event) => setDescription(event.target.value)} rows={5} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label>
-        <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm">分类<input disabled={!editing} value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">系列<input disabled={!editing} value={series} onChange={(event) => setSeries(event.target.value)} placeholder="例如：产品拆解" className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">状态<select disabled={!editing} value={status} onChange={(event) => setStatus(event.target.value as TopicStatus)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800">{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">预计发布时间<input disabled={!editing} type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">实际发布时间<input disabled={!editing} type="datetime-local" value={publishedAt} onChange={(event) => setPublishedAt(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label></div>
+        <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm">分类<input disabled={!editing} value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">系列{editing && <select aria-label="选择已有系列" value={seriesOptions.includes(series) ? series : ''} onChange={event => setSeries(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 dark:border-slate-700 dark:bg-slate-950"><option value="">选择已有系列，或在下方输入新系列</option>{seriesOptions.map(value => <option key={value} value={value}>{value}</option>)}</select>}<input disabled={!editing} value={series} onChange={(event) => setSeries(event.target.value)} placeholder="例如：产品拆解" className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">状态<select disabled={!editing} value={status} onChange={(event) => { setStatus(event.target.value as TopicStatus); if (event.target.value !== 'published') setPublishedAt('') }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800">{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">预计发布时间<input disabled={!editing} type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">实际发布时间<input disabled={!editing} type="datetime-local" value={publishedAt} onChange={(event) => { setPublishedAt(event.target.value); if (event.target.value) setStatus('published') }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label></div>
+        {optionsError && editing && <p role="alert" className="text-sm text-rose-500">{optionsError} <button type="button" onClick={() => setOptionsRetry(value => value + 1)} className="underline">重新加载选项</button></p>}
+        {editing && !topic?.task_id && <label className="block text-sm">关联已有任务
+          <select value={taskId} onChange={event => setTaskId(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+            <option value="">不选择已有任务</option>
+            {taskOptions.map(task => <option key={task.id} value={task.id}>{task.title}</option>)}
+          </select>
+          <span className="mt-1 block text-xs text-slate-500">可选择尚未完成且未关联其他选题的自媒体任务。保存时以本选题的状态和发布时间同步任务；工作中且未选择任务时会自动创建。</span>
+        </label>}
+        {(topic?.task_id || taskId) && <p className="text-xs text-slate-500">预计发布时间同步任务截止日期；已发布同步任务完成和实际完成日；工作中同步正在做。改回未开始会重新打开任务。</p>}
         <div className="rounded-md border border-slate-200 p-3 dark:border-slate-700">{topic?.cover_url ? <img src={topic.cover_url} alt="选题封面" className="mb-3 max-h-52 rounded object-cover" /> : null}{coverFile && <p className="mb-2 text-sm text-slate-500">待上传：{coverFile.name}</p>}{editing && <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-violet-500"><Upload size={16} />{topic?.cover_url ? '替换封面' : '选择封面'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={(event) => setCoverFile(event.target.files?.[0] || null)} /></label>}{editing && topic?.cover_url && <button type="button" onClick={() => void removeCover()} className="ml-4 text-sm text-rose-500">移除封面</button>}</div>
         <div>
           <div className="mb-2 flex items-center justify-between"><span className="text-sm font-medium">发布平台</span>{editing && <button type="button" onClick={() => setPublications((items) => [...items, emptyPublication()])} className="inline-flex items-center gap-1 text-sm text-violet-500"><Plus size={15} />添加</button>}</div>
@@ -123,7 +163,7 @@ export default function TopicDetail() {
             </div>)}
           </div>
         </div>
-        {editing && <div className="flex gap-3"><button type="button" disabled={saving || !title.trim()} onClick={() => void save()} className="rounded-md bg-violet-500 px-4 py-2 text-sm font-medium text-white disabled:bg-slate-400">{saving ? '保存中…' : '保存'}</button>{!isNew && <button type="button" disabled={saving} onClick={() => setEditing(false)} className="rounded-md border border-slate-200 px-4 py-2 text-sm dark:border-slate-700">取消</button>}</div>}
+        {editing && <div className="flex gap-3"><button type="button" disabled={saving || !title.trim()} onClick={() => void save()} className="rounded-md bg-violet-500 px-4 py-2 text-sm font-medium text-white disabled:bg-slate-400">{saving ? '保存中…' : '保存'}</button>{!isNew && <button type="button" disabled={saving} onClick={cancelEdit} className="rounded-md border border-slate-200 px-4 py-2 text-sm dark:border-slate-700">取消</button>}</div>}
       </div>
     </div>
   </div>

@@ -1,5 +1,15 @@
 # Tasks Calendar 验收
 
+## 执行看板
+
+- 新增/历史任务默认进入待安排，按截止日期排序，无截止日期放最后。执行状态与 Calendar 日期独立。
+- 正在做、下一步支持拖拽至卡片前面或列末尾，也支持移列和上下移动按钮；刷新后顺序保留。
+- 正在做超过 3 项仅提示，不阻止加入。完成后退出看板；重新打开保留之前的列和排序位置。
+- 看板不受 Calendar 日期筛选影响；移动端默认显示正在做，可切换列，各列内容限制高度并滚动。
+- 保存中禁用看板操作；失败显示 Toast，原顺序保留。卡片标题可打开现有编辑弹窗。
+- 数据库需升级到 `e3f4a5b6c7d8`。新增 `board_status`、`board_position`；移动接口为 `PATCH /api/tasks/board/{task_id}`，参数 `status` 和可选 `before_id`。
+- 回归用例：`cd backend && uv run python -m unittest tests.test_task_board`，本次未自动运行。
+
 日期采用浏览器本地全天日期。`actual_completion_date` 为真实完成日；`completed_at` 保留完成操作的 UTC 时间。已有记录在新日期为空时按本地时区解释 `completed_at`，不会在迁移时猜测历史时区。
 
 ## 手动场景

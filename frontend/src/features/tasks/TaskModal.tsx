@@ -17,6 +17,8 @@ const CATEGORIES = ['自媒体', 'App 开发', '其他']
 interface AvailableTopic {
   id: string
   title: string
+  status: string
+  scheduled_at: string | null
 }
 
 // 内层组件通过 key 重置，避免 useEffect + setState 的 lint 问题
@@ -32,6 +34,9 @@ function TaskModalInner({ initial, onClose, onSave }: Omit<Props, 'open'>) {
   const [dueDate, setDueDate] = useState(initial?.dueDate ?? '')
   const [topicId, setTopicId] = useState('')
   const [topics, setTopics] = useState<AvailableTopic[]>([])
+  const [topicsLoading, setTopicsLoading] = useState(false)
+  const [topicsError, setTopicsError] = useState('')
+  const [topicsRetry, setTopicsRetry] = useState(0)
   const [saving, setSaving] = useState(false)
   const [completed, setCompleted] = useState(initial?.completed ?? false)
   const [actualDate, setActualDate] = useState(initial ? completionDate(initial) ?? '' : '')
@@ -39,8 +44,20 @@ function TaskModalInner({ initial, onClose, onSave }: Omit<Props, 'open'>) {
 
   useEffect(() => {
     if (initial || category !== '自媒体') return
-    void api.get<AvailableTopic[]>('/api/social-media/topic/available').then(setTopics).catch(() => setTopics([]))
-  }, [category, initial])
+    let cancelled = false
+    const load = async () => {
+      setTopicsLoading(true)
+      setTopicsError('')
+      try {
+        const options = await api.get<AvailableTopic[]>('/api/social-media/topic/available')
+        if (!cancelled) setTopics(options)
+      } catch (error) {
+        if (!cancelled) setTopicsError(error instanceof Error ? error.message : String(error))
+      } finally { if (!cancelled) setTopicsLoading(false) }
+    }
+    void load()
+    return () => { cancelled = true }
+  }, [category, initial, topicsRetry])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -57,7 +74,7 @@ function TaskModalInner({ initial, onClose, onSave }: Omit<Props, 'open'>) {
         dueDate: dueDate || null,
         completed,
         actualCompletionDate: completed ? actualDate : null,
-        topicId: topicId || undefined,
+        topicId: category === '自媒体' ? topicId || undefined : undefined,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       })
       onClose()
@@ -148,12 +165,22 @@ function TaskModalInner({ initial, onClose, onSave }: Omit<Props, 'open'>) {
 
           {!initial && category === '自媒体' && (
             <div>
-              <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">关联选题（未开始）</label>
-              <select aria-label={zh ? '关联选题' : 'Linked topic'} value={topicId} onChange={(e) => setTopicId(e.target.value)} className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 outline-none focus:border-violet-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">
+              <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">关联选题（尚未发布）</label>
+              <select disabled={topicsLoading} aria-label={zh ? '关联选题' : 'Linked topic'} value={topicId} onChange={(e) => {
+                setTopicId(e.target.value)
+                const selected = topics.find(topic => topic.id === e.target.value)
+                if (selected) {
+                  if (!title.trim()) setTitle(selected.title)
+                  if (selected.scheduled_at) setDueDate(localDate(new Date(selected.scheduled_at)))
+                }
+              }} className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 outline-none focus:border-violet-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">
                 <option value="">不关联选题</option>
-                {topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.title}</option>)}
+                {topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.title} · {topic.status === 'working' ? '工作中' : '未开始'}</option>)}
               </select>
-              {topicId && <p className="mt-1 text-xs text-slate-500">创建后该选题会自动变为「工作中」。</p>}
+              {topicsLoading && <p className="mt-1 text-xs text-slate-500">正在加载选题…</p>}
+              {topicsError && <p role="alert" className="mt-1 text-xs text-rose-500">{topicsError} <button type="button" onClick={() => setTopicsRetry(value => value + 1)} className="underline">重试</button></p>}
+              {!topicsLoading && !topicsError && topics.length === 0 && <p className="mt-1 text-xs text-slate-500">暂无未发布且未关联任务的选题。</p>}
+              {topicId && <p className="mt-1 text-xs text-slate-500">关联后同步预计发布日和截止日期；完成任务即标记选题已发布，未完成则进入工作中。</p>}
             </div>
           )}
 

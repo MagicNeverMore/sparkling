@@ -4,6 +4,7 @@ import { useTaskStore, type Task, type TaskCreatePayload } from '../../lib/taskS
 import TaskCalendar from './TaskCalendar'
 import TaskList from './TaskList'
 import TaskModal from './TaskModal'
+import TaskBoard from './TaskBoard'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/useToast'
 import { useI18n } from '../../lib/I18nProvider'
@@ -11,7 +12,7 @@ import { taskActiveOn } from './taskTimeline'
 import { useToday } from './useToday'
 
 export default function Tasks() {
-  const { tasks, loading, loadTasks, addTask, updateTask, toggleComplete, deleteTask } = useTaskStore()
+  const { tasks, loading, loadTasks, addTask, updateTask, toggleComplete, deleteTask, moveBoardTask } = useTaskStore()
   const { t, lang } = useI18n()
   const zh = lang === 'zh'
   const { show: showToast } = useToast()
@@ -72,6 +73,10 @@ export default function Tasks() {
       </header>
       {loadError && <div role="alert" className="mb-4 rounded-xl bg-rose-50 p-4 text-sm text-rose-700 dark:bg-rose-950 dark:text-rose-200">{loadError}<button type="button" onClick={refresh} className="ml-3 underline">{zh ? '重试' : 'Retry'}</button></div>}
       {loading ? <div className="py-20 text-center text-sm text-slate-500">{t('common.loading')}</div> : (
+        <>
+        <TaskBoard tasks={tasks} today={today} busy={pendingIds.size > 0} onEdit={handleEdit}
+          onComplete={id => { void act(id, () => toggleComplete(id)) }}
+          onMove={(id, status, beforeId) => { void act('__board__', () => moveBoardTask(id, status, beforeId)) }} />
         <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
           <div className="min-w-0"><TaskCalendar tasks={tasks} today={today} selectedDate={selectedDate} onDateClick={setSelectedDate} onEdit={handleEdit} /></div>
           <aside className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
@@ -83,6 +88,7 @@ export default function Tasks() {
             <TaskList tasks={visibleTasks} today={today} pendingIds={pendingIds} onToggle={id => { void act(id, () => toggleComplete(id)) }} onEdit={handleEdit} onDelete={setDeleteId} />
           </aside>
         </div>
+        </>
       )}
       <TaskModal open={modalOpen} initial={editingTask} onClose={closeModal} onSave={handleSave} />
       <ConfirmDialog open={deleteId !== null} title={zh ? '删除任务？' : 'Delete task?'} confirming={deleteId !== null && pendingIds.has(deleteId)} onCancel={() => setDeleteId(null)} onConfirm={() => {

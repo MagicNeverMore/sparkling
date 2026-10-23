@@ -136,6 +136,8 @@ class UserTask(Base):
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
     completed_at: Mapped[datetime | None] = mapped_column()
     actual_completion_date: Mapped[str | None] = mapped_column(String)  # 全天日期，不做时区转换
+    board_status: Mapped[str] = mapped_column(String, default="backlog", server_default="backlog")
+    board_position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 

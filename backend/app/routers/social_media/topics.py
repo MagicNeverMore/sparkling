@@ -17,8 +17,9 @@ from ...config import config
 from ...db import get_current_database_config, get_session
 from ...logger import get_logger
 from ...models import ContentTopic, ContentTopicPublication, SocialMediaVideo, UserTask
-from ...services.task_dates import log_completion_change, validate_task_dates
-from ...time_utils import get_timezone, utc_isoformat, utc_naive_to_local
+from ...services.task_dates import log_completion_change
+from ...services.social_media.task_sync import sync_from_topic, validate_link
+from ...time_utils import get_timezone, utc_isoformat
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -56,6 +57,7 @@ class TopicCreate(BaseModel):
     scheduled_at: datetime | None = None
     published_at: datetime | None = None
     timezone: str = "UTC"
+    task_id: str | None = None
     publications: list[PublicationIn] = Field(default_factory=list)
 
     @field_validator("timezone")
@@ -74,6 +76,7 @@ class TopicPatch(BaseModel):
     scheduled_at: datetime | None = None
     published_at: datetime | None = None
     timezone: str = "UTC"
+    task_id: str | None = None
     publications: list[PublicationIn] | None = None
 
     @field_validator("timezone")
@@ -133,52 +136,26 @@ def _remove_cover(cover_path: str | None) -> None:
         path.unlink()
 
 
-def _task_due_date(topic: ContentTopic, timezone_name: str) -> str | None:
-    if topic.scheduled_at is None:
-        return None
-    return utc_naive_to_local(topic.scheduled_at, timezone_name).date().isoformat()
+def _sync_task(topic: ContentTopic, session: Session, timezone_name: str) -> tuple[UserTask, bool, str | None] | None:
+    try:
+        return sync_from_topic(topic, session, timezone_name)
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _sync_task(topic: ContentTopic, session: Session, timezone_name: str) -> tuple[UserTask, str | None] | None:
-    task = session.get(UserTask, topic.task_id) if topic.task_id else None
-    if topic.task_id and task is None:
-        topic.task_id = None
-    if topic.status == "working":
-        if task is None:
-            task = UserTask(
-                title=topic.title,
-                description=topic.description,
-                category="自媒体",
-                due_date=_task_due_date(topic, timezone_name),
-            )
-            session.add(task)
-            session.flush()
-            topic.task_id = task.id
-        else:
-            due_date = _task_due_date(topic, timezone_name)
-            actual = task.actual_completion_date
-            if task.completed and actual is None and task.completed_at:
-                actual = utc_naive_to_local(task.completed_at, timezone_name).date().isoformat()
-            try:
-                validate_task_dates(task.start_date, due_date, actual, task.completed, timezone_name)
-            except ValueError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
-            task.due_date = due_date
-            task.updated_at = datetime.utcnow()
-    elif topic.status == "published" and task is not None and not task.completed:
-        old_date = task.actual_completion_date
-        completed_at = datetime.utcnow()
-        actual = utc_naive_to_local(completed_at, timezone_name).date().isoformat()
-        try:
-            validate_task_dates(task.start_date, task.due_date, actual, True, timezone_name)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        task.completed = True
-        task.completed_at = completed_at
-        task.actual_completion_date = actual
-        task.updated_at = datetime.utcnow()
-        return task, old_date
-    return None
+def _link_existing_task(topic: ContentTopic, task_id: str | None, session: Session) -> None:
+    if not task_id or task_id == topic.task_id:
+        return
+    task = session.get(UserTask, task_id)
+    if task is None or task.completed:
+        raise HTTPException(status_code=422, detail="请选择尚未完成的自媒体任务")
+    try:
+        validate_link(topic, task, session)
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    topic.task_id = task.id
 
 
 def _validate_publications(items: list[PublicationIn], session: Session) -> dict[str, SocialMediaVideo]:
@@ -244,9 +221,24 @@ def list_topics(query: str | None = Query(default=None), status: TopicStatus | N
 
 @router.get("/available", response_model=list[TopicOut])
 def list_available_topics(session: Session = Depends(get_session)) -> list[TopicOut]:
-    topics = session.query(ContentTopic).filter(ContentTopic.status == "not_started").order_by(ContentTopic.title).all()
+    topics = session.query(ContentTopic).filter(ContentTopic.status != "published", ContentTopic.task_id.is_(None)).order_by(ContentTopic.title).all()
     logger.info("topic.available_list count=%d", len(topics))
     return [_to_out(topic, session) for topic in topics]
+
+
+@router.get("/task-options")
+def task_options(session: Session = Depends(get_session)) -> list[dict]:
+    linked = session.query(ContentTopic.task_id).filter(ContentTopic.task_id.is_not(None))
+    tasks = session.query(UserTask).filter(UserTask.category == "自媒体", UserTask.completed.is_(False),
+                                          ~UserTask.id.in_(linked)).order_by(UserTask.title).all()
+    logger.debug("topic.task_options count=%d", len(tasks))
+    return [{"id": task.id, "title": task.title} for task in tasks]
+
+
+@router.get("/series")
+def series_options(session: Session = Depends(get_session)) -> list[str]:
+    return [value for (value,) in session.query(ContentTopic.series).filter(
+        ContentTopic.series.is_not(None), ContentTopic.series != "").distinct().order_by(ContentTopic.series).all()]
 
 
 @router.get("/videos", response_model=list[VideoOut])
@@ -266,17 +258,20 @@ def list_topic_videos(
 
 @router.post("", response_model=TopicOut, status_code=201)
 def create_topic(body: TopicCreate, session: Session = Depends(get_session)) -> TopicOut:
+    if body.published_at and body.status != "published":
+        raise HTTPException(status_code=422, detail="填写实际发布时间时，状态必须为已发布")
     publications = _validate_publications(body.publications, session)
-    topic = ContentTopic(title=body.title.strip(), description=body.description, category=body.category, series=body.series,
+    topic = ContentTopic(title=body.title.strip(), description=body.description, category=body.category, series=body.series.strip() or None if body.series else None,
         status=body.status, scheduled_at=_utc_naive(body.scheduled_at), published_at=_utc_naive(body.published_at))
     session.add(topic)
     session.flush()
     session.add_all([ContentTopicPublication(topic_id=topic.id, platform=publications[item.social_media_video_id].platform if item.social_media_video_id else item.platform, social_media_video_id=item.social_media_video_id) for item in body.publications])
+    _link_existing_task(topic, body.task_id, session)
     completion_change = _sync_task(topic, session, body.timezone)
     session.commit()
     if completion_change:
-        task, old_date = completion_change
-        log_completion_change(task.id, False, True, old_date, task.actual_completion_date)
+        task, old_completed, old_date = completion_change
+        log_completion_change(task.id, old_completed, task.completed, old_date, task.actual_completion_date)
     session.refresh(topic)
     logger.info("topic.created topic_id=%s status=%s publications=%d task_id=%s", topic.id, topic.status, len(body.publications), topic.task_id)
     return _to_out(topic, session)
@@ -296,21 +291,29 @@ def update_topic(topic_id: str, body: TopicPatch, session: Session = Depends(get
     topic = session.get(ContentTopic, topic_id)
     if topic is None:
         raise HTTPException(status_code=404, detail="选题不存在")
+    if body.published_at and body.status not in (None, "published"):
+        raise HTTPException(status_code=422, detail="填写实际发布时间时，状态必须为已发布")
     for field in ("title", "description", "category", "series", "status"):
         if field in body.model_fields_set:
-            setattr(topic, field, getattr(body, field))
+            value = getattr(body, field)
+            if field == "status" and value is None:
+                raise HTTPException(status_code=422, detail="状态不能为空")
+            setattr(topic, field, (value.strip() or None) if field == "series" and value else value)
     if "scheduled_at" in body.model_fields_set:
         topic.scheduled_at = _utc_naive(body.scheduled_at)
     if "published_at" in body.model_fields_set:
         topic.published_at = _utc_naive(body.published_at)
+        if body.published_at:
+            topic.status = "published"
     if body.publications is not None:
         _replace_publications(topic, body.publications, session)
     topic.updated_at = datetime.utcnow()
+    _link_existing_task(topic, body.task_id, session)
     completion_change = _sync_task(topic, session, body.timezone)
     session.commit()
     if completion_change:
-        task, old_date = completion_change
-        log_completion_change(task.id, False, True, old_date, task.actual_completion_date)
+        task, old_completed, old_date = completion_change
+        log_completion_change(task.id, old_completed, task.completed, old_date, task.actual_completion_date)
     session.refresh(topic)
     logger.info("topic.updated topic_id=%s fields=%s status=%s task_id=%s", topic.id, sorted(body.model_fields_set), topic.status, topic.task_id)
     return _to_out(topic, session)
