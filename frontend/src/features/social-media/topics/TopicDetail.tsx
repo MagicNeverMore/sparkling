@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../../lib/api'
 import { useToast } from '../../../components/useToast'
 import type { SocialVideo, Topic, TopicStatus } from './types'
+import SeriesInput from './SeriesInput'
 
 type PublicationDraft = { platform: string; social_media_video_id: string | null }
 
@@ -63,12 +64,18 @@ export default function TopicDetail() {
   useEffect(() => {
     if (!editing) return
     let cancelled = false
-    Promise.all([
+    Promise.allSettled([
       api.get<string[]>('/api/social-media/topic/series'),
       api.get<{ id: string; title: string }[]>('/api/social-media/topic/task-options'),
-    ]).then(([seriesValues, tasks]) => {
-      if (!cancelled) { setSeriesOptions(seriesValues); setTaskOptions(tasks); setOptionsError('') }
-    }).catch(error => { if (!cancelled) setOptionsError(error instanceof Error ? error.message : String(error)) })
+    ]).then(([seriesResult, tasksResult]) => {
+      if (cancelled) return
+      if (seriesResult.status === 'fulfilled') setSeriesOptions(seriesResult.value)
+      if (tasksResult.status === 'fulfilled') setTaskOptions(tasksResult.value)
+      const errors: string[] = []
+      if (seriesResult.status === 'rejected') errors.push('系列加载失败：' + String(seriesResult.reason))
+      if (tasksResult.status === 'rejected') errors.push('任务选项加载失败：' + String(tasksResult.reason))
+      setOptionsError(errors.join('；'))
+    })
     return () => { cancelled = true }
   }, [editing, optionsRetry])
 
@@ -141,7 +148,7 @@ export default function TopicDetail() {
       <div className="space-y-4">
         <label className="block text-sm">标题<input disabled={!editing} value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label>
         <label className="block text-sm">详情<textarea disabled={!editing} value={description} onChange={(event) => setDescription(event.target.value)} rows={5} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label>
-        <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm">分类<input disabled={!editing} value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">系列{editing && <select aria-label="选择已有系列" value={seriesOptions.includes(series) ? series : ''} onChange={event => setSeries(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 dark:border-slate-700 dark:bg-slate-950"><option value="">选择已有系列，或在下方输入新系列</option>{seriesOptions.map(value => <option key={value} value={value}>{value}</option>)}</select>}<input disabled={!editing} value={series} onChange={(event) => setSeries(event.target.value)} placeholder="例如：产品拆解" className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">状态<select disabled={!editing} value={status} onChange={(event) => { setStatus(event.target.value as TopicStatus); if (event.target.value !== 'published') setPublishedAt('') }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800">{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">预计发布时间<input disabled={!editing} type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">实际发布时间<input disabled={!editing} type="datetime-local" value={publishedAt} onChange={(event) => { setPublishedAt(event.target.value); if (event.target.value) setStatus('published') }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label></div>
+        <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm">分类<input disabled={!editing} value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><SeriesInput value={series} options={seriesOptions} disabled={!editing || saving} onChange={setSeries} /><label className="text-sm">状态<select disabled={!editing} value={status} onChange={(event) => { setStatus(event.target.value as TopicStatus); if (event.target.value !== 'published') setPublishedAt('') }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800">{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">预计发布时间<input disabled={!editing} type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">实际发布时间<input disabled={!editing} type="datetime-local" value={publishedAt} onChange={(event) => { setPublishedAt(event.target.value); if (event.target.value) setStatus('published') }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label></div>
         {optionsError && editing && <p role="alert" className="text-sm text-rose-500">{optionsError} <button type="button" onClick={() => setOptionsRetry(value => value + 1)} className="underline">重新加载选项</button></p>}
         {editing && !topic?.task_id && <label className="block text-sm">关联已有任务
           <select value={taskId} onChange={event => setTaskId(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">

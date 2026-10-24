@@ -51,3 +51,5 @@ Thumbs.db
 .codex-task-graph*.md
 截图*.jpg
 截图*.png
+
+/deploy/
