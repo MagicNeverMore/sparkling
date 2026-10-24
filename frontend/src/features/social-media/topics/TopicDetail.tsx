@@ -3,8 +3,10 @@ import { ArrowLeft, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../../lib/api'
 import { useToast } from '../../../components/useToast'
-import type { SocialVideo, Topic, TopicStatus } from './types'
+import type { SocialVideo, Topic, TopicStatus, PerformanceRating } from './types'
 import SeriesInput from './SeriesInput'
+import PerformanceBadge from './PerformanceBadge'
+import { performanceLabels } from './types'
 
 type PublicationDraft = { platform: string; social_media_video_id: string | null }
 
@@ -40,6 +42,7 @@ export default function TopicDetail() {
   const [description, setDescription] = useState('')
   const [category, setCategory] = useState('')
   const [series, setSeries] = useState('')
+  const [performance, setPerformance] = useState<PerformanceRating | ''>('')
   const [seriesOptions, setSeriesOptions] = useState<string[]>([])
   const [taskOptions, setTaskOptions] = useState<{ id: string; title: string }[]>([])
   const [taskId, setTaskId] = useState('')
@@ -54,6 +57,7 @@ export default function TopicDetail() {
     if (isNew) return
     void api.get<Topic>(`/api/social-media/topic/${id}`).then((value) => {
       setTaskId(value.task_id || '')
+      setPerformance(value.performance_rating ?? '')
       setTopic(value); setTitle(value.title); setDescription(value.description || ''); setCategory(value.category || ''); setSeries(value.series || '')
       setStatus(value.status); setScheduledAt(toLocalInput(value.scheduled_at)); setPublishedAt(toLocalInput(value.published_at))
       setPublications(value.publications.map((item) => ({ platform: item.platform, social_media_video_id: item.social_media_video_id })))
@@ -83,8 +87,9 @@ export default function TopicDetail() {
     title: title.trim(), description: description.trim() || null, category: category.trim() || null, series: series.trim() || null, status,
     scheduled_at: toIso(scheduledAt), published_at: toIso(publishedAt),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, publications,
+    performance_rating: status === 'published' ? performance || null : undefined,
     task_id: !topic?.task_id && taskId ? taskId : undefined,
-  }), [category, description, publications, publishedAt, scheduledAt, series, status, title, taskId, topic?.task_id])
+  }), [category, description, publications, publishedAt, scheduledAt, series, status, title, taskId, topic?.task_id, performance])
 
   const uploadCover = async (target: Topic, file: File) => {
     const form = new FormData(); form.append('file', file)
@@ -99,6 +104,7 @@ export default function TopicDetail() {
     try {
       let saved = isNew ? await api.post<Topic>('/api/social-media/topic', payload) : await api.patch<Topic>(`/api/social-media/topic/${id}`, payload)
       if (coverFile) saved = await uploadCover(saved, coverFile)
+      setPerformance(saved.performance_rating ?? '')
       setTopic(saved); setCoverFile(null); setEditing(false)
       setTaskId(saved.task_id || ''); setSeries(saved.series || '')
       setStatus(saved.status); setScheduledAt(toLocalInput(saved.scheduled_at)); setPublishedAt(toLocalInput(saved.published_at))
@@ -110,6 +116,7 @@ export default function TopicDetail() {
   const cancelEdit = () => {
     if (!topic) return
     setTitle(topic.title); setDescription(topic.description || ''); setCategory(topic.category || '')
+    setPerformance(topic.performance_rating ?? '')
     setSeries(topic.series || ''); setTaskId(topic.task_id || ''); setStatus(topic.status)
     setScheduledAt(toLocalInput(topic.scheduled_at)); setPublishedAt(toLocalInput(topic.published_at))
     setPublications(topic.publications.map(item => ({ platform: item.platform, social_media_video_id: item.social_media_video_id })))
@@ -149,6 +156,13 @@ export default function TopicDetail() {
         <label className="block text-sm">标题<input disabled={!editing} value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label>
         <label className="block text-sm">详情<textarea disabled={!editing} value={description} onChange={(event) => setDescription(event.target.value)} rows={5} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label>
         <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm">分类<input disabled={!editing} value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><SeriesInput value={series} options={seriesOptions} disabled={!editing || saving} onChange={setSeries} /><label className="text-sm">状态<select disabled={!editing} value={status} onChange={(event) => { setStatus(event.target.value as TopicStatus); if (event.target.value !== 'published') setPublishedAt('') }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800">{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">预计发布时间<input disabled={!editing} type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label><label className="text-sm">实际发布时间<input disabled={!editing} type="datetime-local" value={publishedAt} onChange={(event) => { setPublishedAt(event.target.value); if (event.target.value) setStatus('published') }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" /></label></div>
+        <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+          <div className="mb-2 flex items-center gap-3"><span className="text-sm font-medium">表现</span>{status === 'published' ? <PerformanceBadge rating={performance || null} /> : <span className="text-xs text-slate-500">发布后可评价</span>}</div>
+          {editing && status === 'published' && <select aria-label="表现" value={performance} onChange={event => setPerformance(event.target.value as PerformanceRating | '')} disabled={saving} className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+            <option value="">待评价</option>
+            {Object.entries(performanceLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>}
+        </div>
         {optionsError && editing && <p role="alert" className="text-sm text-rose-500">{optionsError} <button type="button" onClick={() => setOptionsRetry(value => value + 1)} className="underline">重新加载选项</button></p>}
         {editing && !topic?.task_id && <label className="block text-sm">关联已有任务
           <select value={taskId} onChange={event => setTaskId(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">

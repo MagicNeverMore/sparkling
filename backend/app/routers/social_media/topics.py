@@ -25,6 +25,7 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 TopicStatus = Literal["not_started", "working", "published"]
+PerformanceRating = Literal["excellent", "good", "average", "poor"]
 _IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
 _MAX_COVER_SIZE = 10 * 1024 * 1024
 _PLATFORMS = {"youtube", "bilibili", "douyin", "xiaohongshu", "wechat_channels"}
@@ -49,6 +50,7 @@ class PublicationOut(PublicationIn):
 
 
 class TopicCreate(BaseModel):
+    performance_rating: PerformanceRating | None = None
     title: str = Field(min_length=1, max_length=500)
     description: str | None = None
     category: str | None = Field(default=None, max_length=120)
@@ -68,6 +70,7 @@ class TopicCreate(BaseModel):
 
 
 class TopicPatch(BaseModel):
+    performance_rating: PerformanceRating | None = None
     title: str | None = Field(default=None, min_length=1, max_length=500)
     description: str | None = None
     category: str | None = Field(default=None, max_length=120)
@@ -87,6 +90,7 @@ class TopicPatch(BaseModel):
 
 
 class TopicOut(BaseModel):
+    performance_rating: PerformanceRating | None
     id: str
     title: str
     description: str | None
@@ -185,6 +189,7 @@ def _to_out(topic: ContentTopic, session: Session) -> TopicOut:
     videos = {item.id: item for item in session.query(SocialMediaVideo).filter(SocialMediaVideo.id.in_(video_ids)).all()} if video_ids else {}
     task = session.get(UserTask, topic.task_id) if topic.task_id else None
     return TopicOut(
+        performance_rating=topic.performance_rating,
         id=topic.id, title=topic.title, description=topic.description, category=topic.category, series=topic.series,
         status=topic.status, scheduled_at=utc_isoformat(topic.scheduled_at) if topic.scheduled_at else None,
         published_at=utc_isoformat(topic.published_at) if topic.published_at else None,
@@ -258,12 +263,15 @@ def list_topic_videos(
 
 @router.post("", response_model=TopicOut, status_code=201)
 def create_topic(body: TopicCreate, session: Session = Depends(get_session)) -> TopicOut:
+    if body.performance_rating and body.status != "published":
+        raise HTTPException(status_code=422, detail="发布后才能评价表现")
     if body.published_at and body.status != "published":
         raise HTTPException(status_code=422, detail="填写实际发布时间时，状态必须为已发布")
     publications = _validate_publications(body.publications, session)
     topic = ContentTopic(title=body.title.strip(), description=body.description, category=body.category, series=body.series.strip() or None if body.series else None,
         status=body.status, scheduled_at=_utc_naive(body.scheduled_at), published_at=_utc_naive(body.published_at))
     session.add(topic)
+    topic.performance_rating = body.performance_rating
     session.flush()
     session.add_all([ContentTopicPublication(topic_id=topic.id, platform=publications[item.social_media_video_id].platform if item.social_media_video_id else item.platform, social_media_video_id=item.social_media_video_id) for item in body.publications])
     _link_existing_task(topic, body.task_id, session)
@@ -291,6 +299,11 @@ def update_topic(topic_id: str, body: TopicPatch, session: Session = Depends(get
     topic = session.get(ContentTopic, topic_id)
     if topic is None:
         raise HTTPException(status_code=404, detail="选题不存在")
+    target_status = "published" if body.published_at else body.status or topic.status
+    if body.performance_rating and target_status != "published":
+        raise HTTPException(status_code=422, detail="发布后才能评价表现")
+    if "performance_rating" in body.model_fields_set:
+        topic.performance_rating = body.performance_rating
     if body.published_at and body.status not in (None, "published"):
         raise HTTPException(status_code=422, detail="填写实际发布时间时，状态必须为已发布")
     for field in ("title", "description", "category", "series", "status"):

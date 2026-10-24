@@ -152,6 +152,7 @@ class ContentTopic(Base):
     description: Mapped[str | None] = mapped_column(Text)
     category: Mapped[str | None] = mapped_column(String)
     series: Mapped[str | None] = mapped_column(String)
+    performance_rating: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="not_started", nullable=False)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime)
     published_at: Mapped[datetime | None] = mapped_column(DateTime)

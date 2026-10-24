@@ -1,4 +1,8 @@
 export type TopicStatus = 'not_started' | 'working' | 'published'
+export type PerformanceRating = 'excellent' | 'good' | 'average' | 'poor'
+export const performanceLabels: Record<PerformanceRating, string> = {
+  excellent: '优', good: '良', average: '中', poor: '差',
+}
 
 export interface TopicPublication {
   id: string
@@ -9,6 +13,7 @@ export interface TopicPublication {
 }
 
 export interface Topic {
+  performance_rating: PerformanceRating | null
   id: string
   title: string
   description: string | null
