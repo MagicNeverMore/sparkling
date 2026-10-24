@@ -42,6 +42,7 @@ export default function TopicDetail() {
   const [description, setDescription] = useState('')
   const [category, setCategory] = useState('')
   const [series, setSeries] = useState('')
+  const [retrospective, setRetrospective] = useState('')
   const [performance, setPerformance] = useState<PerformanceRating | ''>('')
   const [seriesOptions, setSeriesOptions] = useState<string[]>([])
   const [taskOptions, setTaskOptions] = useState<{ id: string; title: string }[]>([])
@@ -57,6 +58,7 @@ export default function TopicDetail() {
     if (isNew) return
     void api.get<Topic>(`/api/social-media/topic/${id}`).then((value) => {
       setTaskId(value.task_id || '')
+      setRetrospective(value.retrospective ?? '')
       setPerformance(value.performance_rating ?? '')
       setTopic(value); setTitle(value.title); setDescription(value.description || ''); setCategory(value.category || ''); setSeries(value.series || '')
       setStatus(value.status); setScheduledAt(toLocalInput(value.scheduled_at)); setPublishedAt(toLocalInput(value.published_at))
@@ -87,9 +89,10 @@ export default function TopicDetail() {
     title: title.trim(), description: description.trim() || null, category: category.trim() || null, series: series.trim() || null, status,
     scheduled_at: toIso(scheduledAt), published_at: toIso(publishedAt),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, publications,
+    retrospective: retrospective.trim() || null,
     performance_rating: status === 'published' ? performance || null : undefined,
     task_id: !topic?.task_id && taskId ? taskId : undefined,
-  }), [category, description, publications, publishedAt, scheduledAt, series, status, title, taskId, topic?.task_id, performance])
+  }), [category, description, publications, publishedAt, scheduledAt, series, status, title, taskId, topic?.task_id, performance, retrospective])
 
   const uploadCover = async (target: Topic, file: File) => {
     const form = new FormData(); form.append('file', file)
@@ -104,6 +107,7 @@ export default function TopicDetail() {
     try {
       let saved = isNew ? await api.post<Topic>('/api/social-media/topic', payload) : await api.patch<Topic>(`/api/social-media/topic/${id}`, payload)
       if (coverFile) saved = await uploadCover(saved, coverFile)
+      setRetrospective(saved.retrospective ?? '')
       setPerformance(saved.performance_rating ?? '')
       setTopic(saved); setCoverFile(null); setEditing(false)
       setTaskId(saved.task_id || ''); setSeries(saved.series || '')
@@ -116,6 +120,7 @@ export default function TopicDetail() {
   const cancelEdit = () => {
     if (!topic) return
     setTitle(topic.title); setDescription(topic.description || ''); setCategory(topic.category || '')
+    setRetrospective(topic.retrospective ?? '')
     setPerformance(topic.performance_rating ?? '')
     setSeries(topic.series || ''); setTaskId(topic.task_id || ''); setStatus(topic.status)
     setScheduledAt(toLocalInput(topic.scheduled_at)); setPublishedAt(toLocalInput(topic.published_at))
@@ -163,6 +168,11 @@ export default function TopicDetail() {
             {Object.entries(performanceLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>}
         </div>
+        <label className="block text-sm">分析与复盘
+          <textarea value={retrospective} onChange={event => setRetrospective(event.target.value)} disabled={!editing || saving}
+            rows={6} maxLength={20000} placeholder="记录视频表现、原因分析、经验教训，以及下一次的改进方向…"
+            className="mt-1 w-full resize-y rounded-md border border-slate-200 px-3 py-2 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-800" />
+        </label>
         {optionsError && editing && <p role="alert" className="text-sm text-rose-500">{optionsError} <button type="button" onClick={() => setOptionsRetry(value => value + 1)} className="underline">重新加载选项</button></p>}
         {editing && !topic?.task_id && <label className="block text-sm">关联已有任务
           <select value={taskId} onChange={event => setTaskId(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">

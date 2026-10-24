@@ -13,6 +13,7 @@ export interface TopicPublication {
 }
 
 export interface Topic {
+  retrospective: string | null
   performance_rating: PerformanceRating | null
   id: string
   title: string
